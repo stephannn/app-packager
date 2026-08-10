@@ -906,24 +906,36 @@ function Get-NetworkAppRoot {
         Creates and returns the network content root for an application.
 
     .DESCRIPTION
-        Builds the path <FileServerPath>\Applications\<VendorFolder>\<AppFolder>,
+        Builds the path based on the Application Share Pattern parameter,
         creating each level if it does not exist. Returns the final path.
     #>
-    param(
-        [Parameter(Mandatory)][string]$FileServerPath,
-        [Parameter(Mandatory)][string]$VendorFolder,
-        [Parameter(Mandatory)][string]$AppFolder
+        param(
+        [Parameter(Mandatory)]
+        [string]$FileServerPath,
+
+        [Parameter(Mandatory)]
+        [string]$PathPattern,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Variables
     )
 
-    $appsRoot   = Join-Path $FileServerPath "Applications"
-    $vendorPath = Join-Path $appsRoot $VendorFolder
-    $appPath    = Join-Path $vendorPath $AppFolder
+    $relativePath = $PathPattern
 
-    Initialize-Folder -Path $appsRoot
-    Initialize-Folder -Path $vendorPath
-    Initialize-Folder -Path $appPath
+    foreach ($key in $Variables.Keys) {
+        $value = $Variables[$key]
 
-    return $appPath
+        if ([string]::IsNullOrWhiteSpace([string]$value)) {
+            $relativePath = $relativePath -replace "_?\{$key\}?", ""
+        }
+        else {
+            $relativePath = $relativePath.Replace("{$key}", [string]$value)
+        }
+    }
+
+    Initialize-Folder -Path (Join-Path $FileServerPath $relativePath)
+
+    return Join-Path $FileServerPath $relativePath
 }
 
 # ---------------------------------------------------------------------------

@@ -67,6 +67,7 @@ param(
     [string]$SiteCode = "MCM",
     [string]$Comment = "",
     [string]$FileServerPath = "\\fileserver\sccm$",
+    [string]$ApplicationSharePattern = "Applications\7-Zip\7-Zip",
     [string]$DownloadRoot = "C:\temp\ap",
     [int]$EstimatedRuntimeMins = 15,
     [int]$MaximumRuntimeMins = 30,
@@ -168,8 +169,7 @@ function Invoke-Stage7Zip {
     Write-Log ""
 
     if (-not (Test-IsAdmin)) {
-        Write-Log "Run PowerShell as Administrator." -Level ERROR
-        exit 1
+        Write-Log "Run PowerShell as Administrator." -Level Warning
     }
 
     Initialize-Folder -Path $BaseDownloadRoot
@@ -255,6 +255,8 @@ function Invoke-Stage7Zip {
         AppName         = $appName
         Publisher       = $publisher
         SoftwareVersion = $displayVersion
+        Architecture    = "x64"
+        Language        = "MUI"
         InstallerFile   = $MsiFileName
         InstallerType   = "MSI"
         InstallArgs     = "/qn /norestart"
@@ -326,7 +328,7 @@ function Invoke-Package7Zip {
         throw "Network root path not accessible: $FileServerPath"
     }
 
-    $networkAppRoot = Get-NetworkAppRoot -FileServerPath $FileServerPath -VendorFolder $VendorFolder -AppFolder $AppFolder
+    $networkAppRoot = Get-NetworkAppRoot -FileServerPath $FileServerPath -PathPattern $ApplicationSharePattern -Variables @{ Manufacturer = $manifest.Publisher; ProductName = $manifest.AppName; Version = $manifest.SoftwareVersion; Language = $manifest.Language; Architecture = $manifest.Architecture; }
     $networkContentPath = Join-Path $networkAppRoot $manifest.SoftwareVersion
     Initialize-Folder -Path $networkContentPath
 
