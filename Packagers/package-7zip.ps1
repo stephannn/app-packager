@@ -69,6 +69,7 @@ param(
     [string]$FileServerPath = "\\fileserver\sccm$",
     [string]$ApplicationSharePattern = "Applications\7-Zip\7-Zip",
     [string]$DownloadRoot = "C:\temp\ap",
+    [String]$PSAppDeploymentToolkitPath = "",
     [int]$EstimatedRuntimeMins = 15,
     [int]$MaximumRuntimeMins = 30,
     [string]$LogPath,
@@ -329,11 +330,21 @@ function Invoke-Package7Zip {
     }
 
     $networkAppRoot = Get-NetworkAppRoot -FileServerPath $FileServerPath -PathPattern $ApplicationSharePattern -Variables @{ Manufacturer = $manifest.Publisher; ProductName = $manifest.AppName; Version = $manifest.SoftwareVersion; Language = $manifest.Language; Architecture = $manifest.Architecture; }
-    $networkContentPath = Join-Path $networkAppRoot $manifest.SoftwareVersion
-    Initialize-Folder -Path $networkContentPath
+    $networkContentPath = $networkAppRoot
 
     Write-Log "Network content path         : $networkContentPath"
     Write-Log ""
+
+    if([string]::IsNullOrWhiteSpace($PSAppDeploymentToolkitPath) -eq $false -and (Test-Path -LiteralPath $PSAppDeploymentToolkitPath)) {
+        Write-Log "Copyingd PSADT to network share: $($networkAppRoot)"
+        Copy-Item -Path $PSAppDeploymentToolkitPath -Destination $networkAppRoot -Recurse -Force
+
+        if(Test-Path -LiteralPath (Join-Path $networkAppRoot "Files") -eq $false) {      
+            Initialize-Folder -Path (Join-Path $networkAppRoot "Files")
+        }
+
+        $networkContentPath = Join-Path $networkAppRoot "Files"
+    }
 
     # --- Copy staged content to network ---
     $localFiles = Get-ChildItem -Path $localContentPath -File -ErrorAction Stop
@@ -354,7 +365,7 @@ function Invoke-Package7Zip {
         -Manifest $manifest `
         -SiteCode $SiteCode `
         -Comment $Comment `
-        -NetworkContentPath $networkContentPath `
+        -NetworkContentPath $networkAppRoot `
         -EstimatedRuntimeMins $EstimatedRuntimeMins `
         -MaximumRuntimeMins $MaximumRuntimeMins
 }
