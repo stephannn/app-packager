@@ -2505,6 +2505,7 @@ function New-MecmPreferencesPanel {
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
     <Grid.ColumnDefinitions>
         <ColumnDefinition Width="170"/>
@@ -2544,11 +2545,14 @@ function New-MecmPreferencesPanel {
     <TextBlock Grid.Row="8" Grid.Column="0" Text="DP Group:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Exact name of the Distribution Point Group to target."/>
     <TextBox   Grid.Row="8" Grid.Column="1" x:Name="txtDPGroup" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Distribution Point Group display name (e.g. 'All DPs')"/>
 
-    <TextBlock Grid.Row="9" Grid.Column="0" Text="Console:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,6,0,0" ToolTip="Configuration Manager Console (AdminUI) detection status. Checked once per launch."/>
-    <TextBlock Grid.Row="9" Grid.Column="1" x:Name="txtConsoleStatus" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,6,0,0"/>
+    <TextBlock Grid.Row="9" Grid.Column="0" Text="PSAppDeployToolkit:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Path of the PSAppDeployToolkit for distribution."/>
+    <TextBox   Grid.Row="9" Grid.Column="1" x:Name="txtPSADT" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Path to the PSAppDeployToolkit"/>
 
-    <TextBlock Grid.Row="10" Grid.Column="0" Text="7-Zip CLI:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,6,0,0" ToolTip="7-Zip command-line (7z.exe) detection status. Required by Adobe Reader + TeamViewer Host packagers."/>
-    <TextBlock Grid.Row="10" Grid.Column="1" x:Name="txtSevenZipStatus" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,6,0,0"/>
+    <TextBlock Grid.Row="10" Grid.Column="0" Text="Console:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,6,0,0" ToolTip="Configuration Manager Console (AdminUI) detection status. Checked once per launch."/>
+    <TextBlock Grid.Row="10" Grid.Column="1" x:Name="txtConsoleStatus" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,6,0,0"/>
+
+    <TextBlock Grid.Row="11" Grid.Column="0" Text="7-Zip CLI:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,6,0,0" ToolTip="7-Zip command-line (7z.exe) detection status. Required by Adobe Reader + TeamViewer Host packagers."/>
+    <TextBlock Grid.Row="11" Grid.Column="1" x:Name="txtSevenZipStatus" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,6,0,0"/>
 </Grid>
 '@
 
@@ -2565,18 +2569,20 @@ function New-MecmPreferencesPanel {
     $txtMax = $element.FindName('txtMax')
     $chkAutoDist = $element.FindName('chkAutoDist')
     $txtDPGroup  = $element.FindName('txtDPGroup')
+    $txtPSADT = $element.FindName('txtPSADT')
     $txtConsoleStatus  = $element.FindName('txtConsoleStatus')
     $txtSevenZipStatus = $element.FindName('txtSevenZipStatus')
 
-    $txtSC.Text  = [string]$script:Prefs.SiteCode
-    $txtProvider.Text = [string]$script:Prefs.ProviderMachineName
-    $txtFS.Text  = [string]$script:Prefs.FileShareRoot
-    $txtASP.Text = [string]$script:Prefs.ApplicationSharePattern
-    $txtDL.Text  = [string]$script:Prefs.DownloadRoot
-    $txtEst.Text = [string]$script:Prefs.EstimatedRuntimeMins
-    $txtMax.Text = [string]$script:Prefs.MaximumRuntimeMins
+    $txtSC.Text         = [string]$script:Prefs.SiteCode
+    $txtProvider.Text   = [string]$script:Prefs.ProviderMachineName
+    $txtFS.Text         = [string]$script:Prefs.FileShareRoot
+    $txtASP.Text        = [string]$script:Prefs.ApplicationSharePattern
+    $txtDL.Text         = [string]$script:Prefs.DownloadRoot
+    $txtEst.Text        = [string]$script:Prefs.EstimatedRuntimeMins
+    $txtMax.Text        = [string]$script:Prefs.MaximumRuntimeMins
     $chkAutoDist.IsChecked = [bool]$script:Prefs.ContentDistribution.AutoDistribute
     $txtDPGroup.Text       = [string]$script:Prefs.ContentDistribution.DPGroupName
+    $txtPSADT.Text         = [string]$script:Prefs.PSAppDeployToolkitPath
 
     $cm = $script:Prefs.DetectedTools.ConfigMgrConsole
     if ($cm -and $cm.Found) {
@@ -2614,6 +2620,7 @@ function New-MecmPreferencesPanel {
         $prefsRef.MaximumRuntimeMins        = $maxVal
         $prefsRef.ContentDistribution.AutoDistribute = [bool]$chkAutoDist.IsChecked
         $prefsRef.ContentDistribution.DPGroupName    = $txtDPGroup.Text.Trim()
+        $prefsRef.PSAppDeployToolkitPath             = $txtPSADT.Text.Trim()
     }.GetNewClosure()
 
     return @{ Name = 'MECM Preferences'; Element = $element; Commit = $commit }
