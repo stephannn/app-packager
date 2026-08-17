@@ -172,11 +172,19 @@ function Write-LogErrorRecord {
 function Invoke-DownloadWithRetry {
     <#
     .SYNOPSIS
-        Downloads a file via curl.exe with a single retry on failure.
+        Downloads a file via Invoke-WebRequest with curl.exe fallback and retry logic.
 
     .DESCRIPTION
-        Wraps curl.exe file-download calls (curl.exe -L --fail --silent --show-error -o <file> <url>)
-        with retry logic. Throws on final failure.
+        Attempts to download the file using Invoke-WebRequest first.
+        If Invoke-WebRequest fails, curl.exe is used as a fallback.
+
+        Each attempt consists of:
+        1. Invoke-WebRequest
+        2. curl.exe if Invoke-WebRequest fails
+
+        Retries the complete download operation according to RetryCount.
+
+        Throws on final failure.
 
         Does NOT wrap scraping/variable-capture calls or URL-resolution calls.
     #>
@@ -199,26 +207,94 @@ function Invoke-DownloadWithRetry {
     $maxAttempts = 1 + $RetryCount
 
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+
         if ($attempt -gt 1) {
-            Write-Log ("Retrying download (attempt {0} of {1}) after {2}s delay..." -f $attempt, $maxAttempts, $RetryDelaySec) -Level WARN -Quiet:$Quiet
+            Write-Log (
+                "Retrying download (attempt {0} of {1}) after {2}s delay..." -f
+                $attempt,
+                $maxAttempts,
+                $RetryDelaySec
+            ) -Level WARN -Quiet:$Quiet
+
             Start-Sleep -Seconds $RetryDelaySec
         }
 
-        $allArgs = @('-L', '--fail', '--silent', '--show-error') + $ExtraCurlArgs + @('-o', $OutFile, $Url)
-        & curl.exe @allArgs 2>$null
-        $exitCode = $LASTEXITCODE
+        # ------------------------------------------------------------
+        # First try: Invoke-WebRequest
+        # ------------------------------------------------------------
+        try {
+            Write-Log "Downloading with Invoke-WebRequest: $Url" -Quiet:$Quiet
 
-        if ($exitCode -eq 0) {
-            return
+            Invoke-WebRequest `
+                -Uri $Url `
+                -OutFile $OutFile `
+                -ErrorAction Stop
+
+            if (Test-Path -LiteralPath $OutFile) {
+                Write-Log "Download successful using Invoke-WebRequest: $OutFile" -Quiet:$Quiet
+                return
+            }
+
+            throw "Invoke-WebRequest completed but output file was not created."
+        }
+        catch {
+            $iwrError = $_.Exception.Message
+
+            Write-Log (
+                "Invoke-WebRequest failed: {0}" -f $iwrError
+            ) -Level WARN -Quiet:$Quiet
         }
 
+        # ------------------------------------------------------------
+        # Fallback: curl.exe
+        # ------------------------------------------------------------
+        try {
+            Write-Log "Falling back to curl.exe..." -Level WARN -Quiet:$Quiet
+
+            $allArgs = @(
+                '-L',
+                '--fail',
+                '--silent',
+                '--show-error'
+            ) + $ExtraCurlArgs + @(
+                '-o',
+                $OutFile,
+                $Url
+            )
+
+            & curl.exe @allArgs 2>$null
+            $exitCode = $LASTEXITCODE
+
+            if ($exitCode -eq 0 -and (Test-Path -LiteralPath $OutFile)) {
+                Write-Log "Download successful using curl.exe: $OutFile" -Quiet:$Quiet
+                return
+            }
+
+            throw "curl.exe failed with exit code $exitCode."
+        }
+        catch {
+            $curlError = $_.Exception.Message
+
+            Write-Log (
+                "curl.exe failed: {0}" -f $curlError
+            ) -Level WARN -Quiet:$Quiet
+        }
+
+        # ------------------------------------------------------------
+        # Both methods failed
+        # ------------------------------------------------------------
         if ($attempt -lt $maxAttempts) {
-            Write-Log ("Download attempt {0} failed (curl exit code {1}). Will retry." -f $attempt, $exitCode) -Level WARN -Quiet:$Quiet
+            Write-Log (
+                "Download attempt {0} failed using both Invoke-WebRequest and curl.exe. Will retry." -f
+                $attempt
+            ) -Level WARN -Quiet:$Quiet
         }
     }
 
-    $msg = "Download failed after $maxAttempts attempt(s): $Url"
+    $msg = "Download failed after $maxAttempts attempt(s) using both Invoke-WebRequest and curl.exe: $Url"
+
     Write-Log $msg -Level ERROR -Quiet:$Quiet
+
     throw $msg
 }
 
@@ -869,6 +945,35 @@ function Read-StageManifest {
     return $manifest
 }
 
+function Update-StageManifest {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+        [Parameter(Mandatory)]
+        [string]$Destination,
+        [Parameter(Mandatory)]
+        [string]$RelativePath
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Stage manifest not found: $Path"
+    }
+
+    # Read existing manifest
+    $manifest = Get-Content -LiteralPath $Path -Raw |
+        ConvertFrom-Json
+
+    # Update RelativePath for every FileHashes entry
+    foreach ($fileHash in $manifest.FileHashes) {
+        $fileHash.RelativePath = Join-Path $RelativePath $fileHash.RelativePath
+    }
+
+    # Write manifest back to disk
+    $manifest |
+        ConvertTo-Json -Depth 10 |
+        Set-Content -Path $Destination -Encoding UTF8
+}
+
 # ---------------------------------------------------------------------------
 # MECM helpers (continued)
 # ---------------------------------------------------------------------------
@@ -929,7 +1034,7 @@ function Get-NetworkAppRoot {
             $relativePath = $relativePath -replace "_?\{$key\}?", ""
         }
         else {
-            $relativePath = $relativePath.Replace("{$key}", [string]$value)
+            $relativePath = $relativePath.Replace("{$key}", ([string]$value -replace " ", "-"))
         }
     }
 
@@ -1362,16 +1467,23 @@ function New-MECMApplicationFromManifest {
     #>
     param(
         [Parameter(Mandatory)][pscustomobject]$Manifest,
+        [Parameter(Mandatory)][string]$AppNamePattern,
         [Parameter(Mandatory)][string]$SiteCode,
         [AllowEmptyString()][string]$Comment = '',
         [Parameter(Mandatory)][string]$NetworkContentPath,
+        [string]$PSAppDeployToolkitPath = $null,
         [int]$EstimatedRuntimeMins = 15,
         [int]$MaximumRuntimeMins = 30
     )
 
     $orig = Get-Location
 
-    $contentVerification = Compare-StageFileHashes -Root $NetworkContentPath -Expected $Manifest.FileHashes
+    if($PSAppDeployToolkitPath -and [string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $false) {
+        $contentVerification = Compare-StageFileHashes -Root $NetworkContentPath -Expected $Manifest.FileHashes -AllowExtra
+    } else {
+        $contentVerification = Compare-StageFileHashes -Root $NetworkContentPath -Expected $Manifest.FileHashes
+    }
+    
     if ($contentVerification.Skipped) {
         Write-Log ("Package integrity verification : skipped ({0})" -f $contentVerification.Reason) -Level WARN
     }
@@ -1394,34 +1506,48 @@ function New-MECMApplicationFromManifest {
         }
 
         $appName = $Manifest.AppName
-        if ([string]::IsNullOrWhiteSpace([string]$appName)) {
+        $cmAppName = $AppNamePattern
+
+        $variables = @{ Publisher = $Manifest.Publisher; AppName = $Manifest.AppName; SoftwareVersion = $Manifest.SoftwareVersion; Language = $Manifest.Language; Architecture = $Manifest.Architecture }
+
+        foreach ($key in $Variables.Keys) {
+            $value = $Variables[$key]
+
+            if ([string]::IsNullOrWhiteSpace([string]$value)) {
+                $cmAppName = $cmAppName -replace "_?\{$key\}_?", ""
+            } else {
+                $cmAppName = $cmAppName.Replace("{$key}", ([string]$value -replace " ", "-"))
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace([string]$cmAppName)) {
             throw "Stage manifest AppName is null or empty; cannot create an MECM application. Re-run the Stage phase and verify the manifest."
         }
 
         Write-Log ("Manifest fields              : AppName='{0}' Publisher='{1}' SoftwareVersion='{2}' DetectionType='{3}'" -f $appName, $Manifest.Publisher, $Manifest.SoftwareVersion, $Manifest.Detection.Type) -Level DEBUG
 
-        $step = "Get-CMApplication duplicate check ('$appName')"
-        $existing = Get-CMApplication -Name $appName -ErrorAction SilentlyContinue
+        $step = "Get-CMApplication duplicate check ('$cmAppName')"
+        $existing = Get-CMApplication -Name $cmAppName -ErrorAction SilentlyContinue
         if ($existing) {
             $existingApps = @($existing)
             if ($existingApps.Count -gt 1) {
-                throw "Multiple existing MECM applications matched '$appName'; refusing to package until the duplicate names are resolved."
+                throw "Multiple existing MECM applications matched '$cmAppName'; refusing to package until the duplicate names are resolved."
             }
 
-            $dtName = $appName
-            if (Test-MECMApplicationHasDeploymentType -ApplicationName $appName -DeploymentTypeName $dtName) {
-                Write-Log "Application already exists    : $appName" -Level WARN
+            $dtName = $cmAppName
+            if (Test-MECMApplicationHasDeploymentType -ApplicationName $cmAppName -DeploymentTypeName $dtName) {
+                Write-Log "Application already exists    : $cmAppName" -Level WARN
                 Write-Log "Deployment type validated     : $dtName"
                 return [UInt32]$existingApps[0].CI_ID
             }
 
-            throw "Existing MECM application '$appName' is missing deployment type '$dtName'. This looks like a partial prior package run; fix or remove the partial app before packaging again."
+            throw "Existing MECM application '$cmAppName' is missing deployment type '$dtName'. This looks like a partial prior package run; fix or remove the partial app before packaging again."
         }
 
-        Write-Log "Creating CM Application      : $appName"
-        $step = "New-CMApplication ('$appName')"
+        Write-Log "Creating CM Application      : $cmAppName"
+        $step = "New-CMApplication ('$cmAppName')"
         $cmAppParams = @{
-            Name             = $appName
+            Name             = $cmAppName
             Publisher        = $Manifest.Publisher
             SoftwareVersion  = $Manifest.SoftwareVersion
             Description      = $Comment
@@ -1441,13 +1567,11 @@ function New-MECMApplicationFromManifest {
         $detType = if ($Manifest.Detection.Type) { $Manifest.Detection.Type } else { 'RegistryKeyValue' }
 
         # Common deployment type parameters (splatted)
-        $dtName = $appName
+        $dtName = $cmAppName
         $dtParams = @{
-            ApplicationName           = $appName
-            DeploymentTypeName        = $dtName
+            ApplicationName           = $cmAppName
+            DeploymentTypeName        = $cmAppName + " - Install"
             ContentLocation           = $NetworkContentPath
-            InstallCommand            = 'install.bat'
-            UninstallCommand          = 'uninstall.bat'
             InstallationBehaviorType  = 'InstallForSystem'
             LogonRequirementType      = 'WhetherOrNotUserLoggedOn'
             EstimatedRuntimeMins      = $EstimatedRuntimeMins
@@ -1456,6 +1580,14 @@ function New-MECMApplicationFromManifest {
             SlowNetworkDeploymentMode = 'Download'
             UserInteractionMode       = 'Hidden'
             ErrorAction               = 'Stop'
+        }
+
+        if($PSAppDeployToolkitPath -and [string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $false) {
+            $dtParams['InstallCommand']     = 'Deploy-Application.EXE INSTALL'
+            $dtParams['UninstallCommand']   = 'Deploy-Application.EXE UNINSTALL'
+        } else {
+            $dtParams['InstallCommand']     = 'install.bat'
+            $dtParams['UninstallCommand']   = 'uninstall.bat'
         }
 
         # Manifest field name matches the cmdlet's parameter TYPE
