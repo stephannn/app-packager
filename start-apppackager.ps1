@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     MahApps.Metro WPF front-end for application packager scripts (metadata-driven, no network on launch).
 
@@ -88,26 +88,28 @@ function Get-PreferencesPath {
 
 function Read-Preferences {
     $defaults = [pscustomobject]@{
-        SiteCode             = "MCM"
-        ProviderMachineName  = ""
-        FileShareRoot        = "\\fileserver\sccm$"
-        ContentLayout        = "Nested"
-        DownloadRoot         = "C:\temp\ap"
-        EstimatedRuntimeMins = 15
-        MaximumRuntimeMins   = 30
-        CompanyName          = ""
-        M365Channel          = "MonthlyEnterprise"
-        M365DeployMode       = "Managed"
-        M365ExcludeApps      = @('Groove','Lync','OneDrive','Teams','Bing')
-        SSMSInstallOptions   = [pscustomobject]@{
-            UIMode             = "Quiet"
-            DownloadThenInstall = $true
-            NoUpdateInstaller  = $false
-            IncludeRecommended = $false
-            IncludeOptional    = $false
-            RemoveOos          = $true
-            ForceClose         = $false
-            InstallPath        = ""
+        SiteCode                = "MCM"
+        ProviderMachineName     = ""
+        FileShareRoot           = "\\fileserver\sccm$"
+        ApplicationSharePattern = "{Manufacturer}_{ProductName}_{Version}_{Language}_{Architecture}_01"
+        DownloadRoot            = "C:\temp\ap"
+        PSAppDeployToolkitPath  = ""
+        MECMApplicationFolder   = ""
+        EstimatedRuntimeMins    = 15
+        MaximumRuntimeMins      = 30
+        CompanyName             = ""
+        M365Channel             = "MonthlyEnterprise"
+        M365DeployMode          = "Managed"
+        M365ExcludeApps         = @('Groove','Lync','OneDrive','Teams','Bing')
+        SSMSInstallOptions      = [pscustomobject]@{
+                UIMode              = "Quiet"
+                DownloadThenInstall = $true
+                NoUpdateInstaller   = $false
+                IncludeRecommended  = $false
+                IncludeOptional     = $false
+                RemoveOos           = $true
+                ForceClose          = $false
+                InstallPath         = ""
         }
         HiddenApplications   = @()
         AppFlow              = [pscustomobject]@{
@@ -141,12 +143,10 @@ function Read-Preferences {
             }
         }
         ContentDistribution  = [pscustomobject]@{
-            AutoDistribute                = $false
-            DPGroupName                   = ''
-            DeployToTestCollection        = $false
-            TestCollectionName            = ''
-            CreateTestCollectionIfMissing = $false
+            AutoDistribute = $false
+            DPGroupName    = ''
         }
+        AppNamePattern = '{Publisher} {AppName} - {SoftwareVersion}'
         Intune               = [pscustomobject]@{
             CreateIntuneWin = $false
         }
@@ -165,12 +165,15 @@ function Read-Preferences {
         elseif ($data.MECM -and $null -ne $data.MECM.ServerFQDN) {
             $defaults.ProviderMachineName = [string]$data.MECM.ServerFQDN
         }
-        if ($null -ne $data.FileShareRoot)         { $defaults.FileShareRoot        = [string]$data.FileShareRoot }
-        if ([string]$data.ContentLayout -in @('Nested','Flat')) { $defaults.ContentLayout = [string]$data.ContentLayout }
-        if ($null -ne $data.DownloadRoot)          { $defaults.DownloadRoot         = [string]$data.DownloadRoot }
-        if ($null -ne $data.EstimatedRuntimeMins)  { $defaults.EstimatedRuntimeMins = [int]$data.EstimatedRuntimeMins }
-        if ($null -ne $data.MaximumRuntimeMins)    { $defaults.MaximumRuntimeMins   = [int]$data.MaximumRuntimeMins }
-        if ($null -ne $data.CompanyName)            { $defaults.CompanyName          = [string]$data.CompanyName }
+        if ($null -ne $data.FileShareRoot)              { $defaults.FileShareRoot           = [string]$data.FileShareRoot }
+        if ($null -ne $data.ApplicationSharePattern)    { $defaults.ApplicationSharePattern = [string]$data.ApplicationSharePattern }
+        if ($null -ne $data.AppNamePattern)             { $defaults.AppNamePattern          = [string]$data.AppNamePattern }
+        if ($null -ne $data.DownloadRoot)               { $defaults.DownloadRoot            = [string]$data.DownloadRoot }
+        if ($null -ne $data.PSAppDeployToolkitPath)     { $defaults.PSAppDeployToolkitPath  = [string]$data.PSAppDeployToolkitPath }
+        if ($null -ne $data.EstimatedRuntimeMins)       { $defaults.EstimatedRuntimeMins    = [int]$data.EstimatedRuntimeMins }
+        if ($null -ne $data.MaximumRuntimeMins)         { $defaults.MaximumRuntimeMins      = [int]$data.MaximumRuntimeMins }
+        if ($null -ne $data.CompanyName)                { $defaults.CompanyName             = [string]$data.CompanyName }
+        if ($null -ne $data.MECMApplicationFolder)      { $defaults.MECMApplicationFolder   = [string]$data.MECMApplicationFolder }
 
         # M365Channel: validate against current set; migrate legacy SemiAnnual
         # and SemiAnnualPreview to MonthlyEnterprise (SAEC retired from the UI).
@@ -261,18 +264,7 @@ function Read-Preferences {
             if ($null -ne $cd.DPGroupName) {
                 $defaults.ContentDistribution.DPGroupName = [string]$cd.DPGroupName
             }
-            if ($null -ne $cd.DeployToTestCollection) {
-                try { $defaults.ContentDistribution.DeployToTestCollection = [bool]$cd.DeployToTestCollection } catch { }
-            }
-            if ($null -ne $cd.TestCollectionName) {
-                $defaults.ContentDistribution.TestCollectionName = [string]$cd.TestCollectionName
-            }
-            if ($null -ne $cd.CreateTestCollectionIfMissing) {
-                try { $defaults.ContentDistribution.CreateTestCollectionIfMissing = [bool]$cd.CreateTestCollectionIfMissing } catch { }
-            }
         }
-
-        # Intune: .intunewin production during Package.
         if ($null -ne $data.Intune -and $null -ne $data.Intune.CreateIntuneWin) {
             try { $defaults.Intune.CreateIntuneWin = [bool]$data.Intune.CreateIntuneWin } catch { }
         }
@@ -315,20 +307,6 @@ function Read-Preferences {
             if ($null -ne $sz.ExePath)         { $stored.ExePath         = [string]$sz.ExePath }
             if ($null -ne $sz.DetectedAt)      { $stored.DetectedAt      = [string]$sz.DetectedAt }
             $defaults.DetectedTools.SevenZipCli = $stored
-        }
-        if ($null -ne $data.DetectedTools -and $null -ne $data.DetectedTools.IntuneWinAppUtil) {
-            $iw = $data.DetectedTools.IntuneWinAppUtil
-            $stored = [pscustomobject]@{
-                Found          = $false
-                DisplayVersion = ''
-                ExePath        = ''
-                DetectedAt     = ''
-            }
-            if ($null -ne $iw.Found)          { try { $stored.Found = [bool]$iw.Found } catch { } }
-            if ($null -ne $iw.DisplayVersion) { $stored.DisplayVersion = [string]$iw.DisplayVersion }
-            if ($null -ne $iw.ExePath)        { $stored.ExePath        = [string]$iw.ExePath }
-            if ($null -ne $iw.DetectedAt)     { $stored.DetectedAt     = [string]$iw.DetectedAt }
-            $defaults.DetectedTools.IntuneWinAppUtil = $stored
         }
     }
     catch { }
@@ -502,6 +480,7 @@ function Invoke-DetectSevenZipCli {
     return $result
 }
 
+
 function Get-IntuneWinToolCachePath {
     return (Join-Path $env:LOCALAPPDATA 'AppPackager\Tools')
 }
@@ -551,7 +530,6 @@ $script:Prefs = Read-Preferences
 try {
     $script:Prefs.DetectedTools.ConfigMgrConsole = Invoke-DetectConfigMgrConsole
     $script:Prefs.DetectedTools.SevenZipCli      = Invoke-DetectSevenZipCli
-    $script:Prefs.DetectedTools.IntuneWinAppUtil = Invoke-DetectIntuneWinAppUtil -KnownPath ([string]$script:Prefs.DetectedTools.IntuneWinAppUtil.ExePath)
     Save-Preferences -Prefs $script:Prefs
 } catch { }
 
@@ -871,7 +849,7 @@ function Assert-PackagerPackageIntegrity {
         [Parameter(Mandatory)][string]$PackagerPath,
         [Parameter(Mandatory)][string]$FileServerPath,
         [string]$DownloadRoot = $null,
-        [ValidateSet('Nested','Flat')][string]$ContentLayout = 'Nested'
+        [string]$PSAppDeployToolkitPath = $null
     )
 
     if ($Result.ExitCode -ne 0) { return }
@@ -883,24 +861,31 @@ function Assert-PackagerPackageIntegrity {
     if ([string]::IsNullOrWhiteSpace($manifestPath) -or -not (Test-Path -LiteralPath $manifestPath)) {
         throw "Package integrity verification could not find stage-manifest.json."
     }
-
+    
     $manifest = Read-StageManifest -Path $manifestPath
+
+    if([string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $false -and (Test-Path -LiteralPath $PSAppDeployToolkitPath)) {
+        foreach ($fileHash in $manifest.FileHashes) {
+            $fileHash.RelativePath = Join-Path "Files" $fileHash.RelativePath
+        }
+    }
+
     $networkContentPath = Get-PackagerLoggedPath -Text $Result.StdOut -Label 'Network content path'
     if ([string]::IsNullOrWhiteSpace($networkContentPath)) {
         $info = Get-PackagerFolderInfo -ScriptPath $PackagerPath
         if (-not $info.VendorFolder -or -not $info.AppFolder) {
             throw "Package integrity verification could not resolve the network content path."
         }
-        if ($ContentLayout -eq 'Flat') {
-            $networkContentPath = Join-Path (Join-Path $FileServerPath 'Applications') ('{0}-{1}-{2}' -f $info.VendorFolder, $info.AppFolder, $manifest.SoftwareVersion)
-        }
-        else {
-            $networkContentPath = Join-Path (Join-Path (Join-Path $FileServerPath 'Applications') $info.VendorFolder) $info.AppFolder
-            $networkContentPath = Join-Path $networkContentPath $manifest.SoftwareVersion
-        }
+        $networkContentPath = Join-Path (Join-Path (Join-Path $FileServerPath 'Applications') $info.VendorFolder) $info.AppFolder
+        $networkContentPath = Join-Path $networkContentPath $manifest.SoftwareVersion
     }
 
-    $comparison = Compare-StageFileHashes -Root $networkContentPath -Expected $manifest.FileHashes
+    if($PSAppDeployToolkitPath -and [string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $false) {
+        $comparison = Compare-StageFileHashes -Root $NetworkContentPath -Expected $Manifest.FileHashes -AllowExtra
+    } else {
+        $comparison = Compare-StageFileHashes -Root $NetworkContentPath -Expected $Manifest.FileHashes
+    }
+    
     if (-not $comparison.Pass) {
         throw ("Package integrity verification failed: {0}" -f (Get-StageFileHashComparisonMessage -Comparison $comparison))
     }
@@ -1284,6 +1269,7 @@ function Invoke-PackagerStage {
         [Parameter(Mandatory)][string]$PackagerPath,
         [Parameter(Mandatory)][string]$LogFolder,
         [string]$DownloadRoot = $null,
+        [string]$PSAppDeployToolkitPath = $null,
         [string]$M365Channel = $null,
         [string]$M365DeployMode = $null,
         [string]$SevenZipPath = '',
@@ -1305,6 +1291,7 @@ function Invoke-PackagerStage {
     $psi.WorkingDirectory = Split-Path -Parent $PackagerPath
     $argsBase = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PackagerPath, '-StageOnly', '-LogPath', $structuredLog)
     if ($DownloadRoot) { $argsBase += @('-DownloadRoot', $DownloadRoot) }
+    if ($PSAppDeployToolkitPath) { $argsBase += @('-PSAppDeployToolkitPath', $PSAppDeployToolkitPath) }
     if ($M365Channel) { $argsBase += @('-M365Channel', $M365Channel) }
     if ($M365DeployMode) { $argsBase += @('-M365DeployMode', $M365DeployMode) }
     Set-ProcessStartInfoArgumentList -StartInfo $psi -Arguments $argsBase
@@ -1326,11 +1313,15 @@ function Invoke-PackagerPackage {
     param(
         [Parameter(Mandatory)][string]$PackagerPath,
         [Parameter(Mandatory)][string]$SiteCode,
+        [string]$MECMApplicationFolder = '',
         [string]$ProviderMachineName = '',
         [AllowEmptyString()][string]$Comment = '',
         [Parameter(Mandatory)][string]$FileServerPath,
+        [Parameter(Mandatory)][string]$ApplicationSharePattern,
+        [Parameter(Mandatory)][string]$AppNamePattern,
         [Parameter(Mandatory)][string]$LogFolder,
         [string]$DownloadRoot = $null,
+        [string]$PSAppDeployToolkitPath = $null,
         [string]$M365Channel = $null,
         [string]$M365DeployMode = $null,
         [int]$EstimatedRuntimeMins = 0,
@@ -1338,7 +1329,6 @@ function Invoke-PackagerPackage {
         [string]$SevenZipPath = '',
         [switch]$CreateIntuneWin,
         [string]$IntuneWinToolPath = '',
-        [ValidateSet('Nested','Flat')][string]$ContentLayout = 'Nested',
         [System.Windows.Controls.TextBox]$LogTextBox = $null
     )
 
@@ -1355,12 +1345,13 @@ function Invoke-PackagerPackage {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell.exe"
     $psi.WorkingDirectory = Split-Path -Parent $PackagerPath
-    $argsBase = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PackagerPath, '-PackageOnly', '-SiteCode', $SiteCode, '-Comment', $Comment, '-LogPath', $structuredLog)
+    $argsBase = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PackagerPath, '-PackageOnly', '-SiteCode', $SiteCode, '-MECMApplicationFolder', $MECMApplicationFolder, '-Comment', $Comment, '-ApplicationSharePattern', $ApplicationSharePattern, '-LogPath', $structuredLog)
     if (Test-PackagerSupportsFileServerPath -PackagerPath $PackagerPath) {
         $argsBase += @('-FileServerPath', $FileServerPath)
     }
     if ($DownloadRoot) { $argsBase += @('-DownloadRoot', $DownloadRoot) }
-    if ($ContentLayout) { $argsBase += @('-ContentLayout', $ContentLayout) }
+    if ($PSAppDeployToolkitPath) { $argsBase += @('-PSAppDeployToolkitPath', $PSAppDeployToolkitPath) }
+    if ($AppNamePattern) { $argsBase += @('-AppNamePattern', $AppNamePattern) }
     if ($M365Channel) { $argsBase += @('-M365Channel', $M365Channel) }
     if ($M365DeployMode) { $argsBase += @('-M365DeployMode', $M365DeployMode) }
     if ($EstimatedRuntimeMins -gt 0) { $argsBase += @('-EstimatedRuntimeMins', [string]$EstimatedRuntimeMins) }
@@ -1373,12 +1364,8 @@ function Invoke-PackagerPackage {
     Set-PackagerEnvironment -StartInfo $psi -SevenZipPath $SevenZipPath -ProviderMachineName $ProviderMachineName
 
     $result = Invoke-ProcessWithStreaming -StartInfo $psi -OutLog $outLog -ErrLog $errLog -StructuredLog $structuredLog -LogTextBox $LogTextBox
-    Assert-PackagerPackageIntegrity -Result $result -PackagerPath $PackagerPath -FileServerPath $FileServerPath -DownloadRoot $DownloadRoot -ContentLayout $ContentLayout
+    Assert-PackagerPackageIntegrity -Result $result -PackagerPath $PackagerPath -FileServerPath $FileServerPath -DownloadRoot $DownloadRoot -PSAppDeployToolkitPath $PSAppDeployToolkitPath
 
-    # Optional post-step: produce a .intunewin beside the network content.
-    # Runs only after integrity passes; failures ride on the result for the
-    # caller to surface, never thrown - the MECM application already exists
-    # by this point.
     if ($CreateIntuneWin -and $result.ExitCode -eq 0) {
         $intuneNote = Invoke-PackagerIntuneWinPostStep -Result $result -PackagerPath $PackagerPath -FileServerPath $FileServerPath -DownloadRoot $DownloadRoot -ToolPath $IntuneWinToolPath -ContentLayout $ContentLayout
         if ($intuneNote) {
@@ -1434,10 +1421,6 @@ function Get-IntuneWinToolPathForContext {
 }
 
 function Select-OnlyUpdateAvailable {
-    # Clear every row first, then select within the visible (filtered) set
-    # only: a row hidden by the grid filter must never keep or gain
-    # Selected=true, or a later Stage/Package would run on rows the user
-    # cannot see.
     foreach ($item in $script:PackagerData) { $item.Selected = $false }
     foreach ($item in @($dataGrid.ItemsSource)) {
         $item.Selected = ($item.Status -eq "Update available")
@@ -1503,6 +1486,76 @@ function Get-WindowStatePath {
     Join-Path $PSScriptRoot "AppPackager.windowstate.json"
 }
 
+function Save-WindowState {
+    param([Parameter(Mandatory)]$Window)
+
+    $state = @{}
+    if ($Window.WindowState -eq [System.Windows.WindowState]::Normal) {
+        $state.Left   = [int]$Window.Left
+        $state.Top    = [int]$Window.Top
+        $state.Width  = [int]$Window.Width
+        $state.Height = [int]$Window.Height
+    }
+    else {
+        $state.Left   = [int]$Window.RestoreBounds.Left
+        $state.Top    = [int]$Window.RestoreBounds.Top
+        $state.Width  = [int]$Window.RestoreBounds.Width
+        $state.Height = [int]$Window.RestoreBounds.Height
+    }
+    $state.Maximized = ($Window.WindowState -eq [System.Windows.WindowState]::Maximized)
+    $state.DarkTheme = ($toggleTheme.IsOn -eq $true)
+    $state.DebugColumns = ($toggleDebugCols.IsOn -eq $true)
+
+    try {
+        $json = $state | ConvertTo-Json
+        Set-Content -LiteralPath (Get-WindowStatePath) -Value $json -Encoding UTF8
+    }
+    catch { }
+}
+
+function Restore-WindowState {
+    param([Parameter(Mandatory)]$Window)
+
+    $path = Get-WindowStatePath
+    if (-not (Test-Path -LiteralPath $path)) { return }
+
+    try {
+        $state = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+
+        $w = [int]$state.Width
+        $h = [int]$state.Height
+        if ($w -lt $Window.MinWidth)  { $w = [int]$Window.MinWidth }
+        if ($h -lt $Window.MinHeight) { $h = [int]$Window.MinHeight }
+
+        # Check if the saved position is visible on any monitor
+        $screens = [System.Windows.Forms.Screen]::AllScreens
+        $visible = $false
+        foreach ($screen in $screens) {
+            $titleBarRect = New-Object System.Drawing.Rectangle ([int]$state.Left), ([int]$state.Top), $w, 40
+            if ($screen.WorkingArea.IntersectsWith($titleBarRect)) {
+                $visible = $true
+                break
+            }
+        }
+
+        if ($visible) {
+            $Window.WindowStartupLocation = [System.Windows.WindowStartupLocation]::Manual
+            $Window.Left   = [double]$state.Left
+            $Window.Top    = [double]$state.Top
+            $Window.Width  = [double]$w
+            $Window.Height = [double]$h
+        }
+
+        if ($state.Maximized -eq $true) {
+            $Window.WindowState = [System.Windows.WindowState]::Maximized
+        }
+
+        # Restore theme and debug column state (applied after controls are wired)
+        $script:SavedDarkTheme = if ($null -ne $state.DarkTheme) { [bool]$state.DarkTheme } else { $true }
+        $script:SavedDebugCols = if ($null -ne $state.DebugColumns) { [bool]$state.DebugColumns } else { $false }
+    }
+    catch { }
+}
 
 # =============================================================================
 # CWA Switches (carried over)
@@ -1663,7 +1716,7 @@ function Invoke-BatchUpdate {
         [Parameter(Mandatory)][string]$SiteCode,
         [string]$ProviderMachineName = '',
         [string]$FileServerPath,
-        [ValidateSet('Nested','Flat')][string]$ContentLayout = 'Nested',
+        [string]$PSAppDeployToolkitPath = '',
         [string]$DownloadRoot,
         [int]$EstimatedRuntimeMins = 15,
         [int]$MaximumRuntimeMins = 30,
@@ -1783,12 +1836,12 @@ function Invoke-BatchUpdate {
 
         # 4. Invoke the packager for Stage / StageAndPackage
         $pkgArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, '-SiteCode', $SiteCode)
-        if ($FileServerPath)       { $pkgArgs += @('-FileServerPath',       $FileServerPath)       }
-        if ($ContentLayout)        { $pkgArgs += @('-ContentLayout',        $ContentLayout)        }
-        if ($DownloadRoot)         { $pkgArgs += @('-DownloadRoot',         $DownloadRoot)         }
-        if ($EstimatedRuntimeMins) { $pkgArgs += @('-EstimatedRuntimeMins', $EstimatedRuntimeMins) }
-        if ($MaximumRuntimeMins)   { $pkgArgs += @('-MaximumRuntimeMins',   $MaximumRuntimeMins)   }
-        if ($Comment)              { $pkgArgs += @('-Comment',              $Comment)              }
+        if ($FileServerPath)         { $pkgArgs += @('-FileServerPath',         $FileServerPath)       }
+        if ($DownloadRoot)           { $pkgArgs += @('-DownloadRoot',           $DownloadRoot)         }
+        if ($PSAppDeployToolkitPath) { $pkgArgs += @('-PSAppDeployToolkitPath', $PSAppDeployToolkitPath) }
+        if ($EstimatedRuntimeMins)   { $pkgArgs += @('-EstimatedRuntimeMins',   $EstimatedRuntimeMins) }
+        if ($MaximumRuntimeMins)     { $pkgArgs += @('-MaximumRuntimeMins',     $MaximumRuntimeMins)   }
+        if ($Comment)                { $pkgArgs += @('-Comment',                $Comment)              }
         if ($OnUpdateFound -eq 'Stage') { $pkgArgs += '-StageOnly' }
 
         try {
@@ -1875,8 +1928,10 @@ if ($BatchMode) {
 
     $prefs = if (Test-Path (Get-PreferencesPath)) { Read-Preferences } else { $null }
     $fileServerPath   = if ($prefs -and $prefs.FileShareRoot)             { $prefs.FileShareRoot }             else { $null }
-    $contentLayout    = if ($prefs -and $prefs.ContentLayout)             { [string]$prefs.ContentLayout }     else { 'Nested' }
+    $ApplicationSharePattern = if ($prefs -and $prefs.ApplicationSharePattern)      { $prefs.ApplicationSharePattern }      else { $null }
+    $AppNamePattern        = if ($prefs -and $prefs.AppNamePattern)                   { $prefs.AppNamePattern }                   else { $null }
     $downloadRoot     = if ($prefs -and $prefs.DownloadRoot)              { $prefs.DownloadRoot }              else { $null }
+    $PSAppDeployToolkitPath  = if ($prefs -and $prefs.PSAppDeployToolkitPath) { $prefs.PSAppDeployToolkitPath } else { $null }
     $providerForBatch = if ($script:Prefs -and $script:Prefs.ProviderMachineName) { [string]$script:Prefs.ProviderMachineName } else { $null }
     $cadenceOverrides = if ($prefs -and $prefs.AppFlow.CadenceOverrides)  { $prefs.AppFlow.CadenceOverrides }  else { $null }
     $sevenZipPath     = $null
@@ -1901,8 +1956,8 @@ if ($BatchMode) {
         -SiteCode          $SiteCode `
         -ProviderMachineName $providerForBatch `
         -FileServerPath    $fileServerPath `
-        -ContentLayout     $contentLayout `
         -DownloadRoot      $downloadRoot `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
         -SevenZipPath      $sevenZipPath `
         -CadenceOverrides  $cadenceOverrides `
         -Force:$Force
@@ -1934,9 +1989,129 @@ $reader = New-Object System.Xml.XmlNodeReader $xaml
 $window = [System.Windows.Markup.XamlReader]::Load($reader)
 
 # =============================================================================
-# Title-bar drag fallback. PS51-WPF-033. SuiteCommon owns the hook and its
-# state; wire on every MetroWindow (main window and every modal popup).
+# Title-bar drag fallback. PS51-WPF-033.
+# Some VS Code PowerShell launch contexts can leave MahApps' custom title
+# thumb unable to initiate native window move. Install a WM_NCHITTEST hook
+# returning HTCAPTION for the title band, plus a managed DragMove fallback
+# for hosts where HwndSource cannot be hooked. Wire on every MetroWindow
+# (main window and every modal popup).
 # =============================================================================
+$script:TitleBarHitTestWindows = @{}
+$script:TitleBarHitTestHooks   = @{}
+
+function Get-TitleBarDragHeight {
+    param([MahApps.Metro.Controls.MetroWindow]$Window)
+    try {
+        $h = [double]$Window.TitleBarHeight
+        if ($h -gt 0 -and -not [double]::IsNaN($h)) { return $h }
+    } catch { $null = $_ }
+    return 30.0
+}
+
+function Get-InputAncestors {
+    param([System.Windows.DependencyObject]$Start)
+    $cur = $Start
+    while ($cur) {
+        $cur
+        $parent = $null
+        if ($cur -is [System.Windows.Media.Visual] -or $cur -is [System.Windows.Media.Media3D.Visual3D]) {
+            try { $parent = [System.Windows.Media.VisualTreeHelper]::GetParent($cur) } catch { $parent = $null }
+        }
+        if (-not $parent -and $cur -is [System.Windows.FrameworkElement]) { $parent = $cur.Parent }
+        if (-not $parent -and $cur -is [System.Windows.FrameworkContentElement]) { $parent = $cur.Parent }
+        if (-not $parent -and $cur -is [System.Windows.ContentElement]) {
+            try { $parent = [System.Windows.ContentOperations]::GetParent($cur) } catch { $parent = $null }
+        }
+        $cur = $parent
+    }
+}
+
+function Test-IsWindowCommandPoint {
+    param([MahApps.Metro.Controls.MetroWindow]$Window, [System.Windows.Point]$Point)
+    try {
+        [void]$Window.ApplyTemplate()
+        $commands = $Window.Template.FindName('PART_WindowButtonCommands', $Window)
+        if ($commands -and $commands.IsVisible -and $commands.ActualWidth -gt 0 -and $commands.ActualHeight -gt 0) {
+            $origin = $commands.TransformToAncestor($Window).Transform([System.Windows.Point]::new(0, 0))
+            if ($Point.X -ge $origin.X -and $Point.X -le ($origin.X + $commands.ActualWidth) -and
+                $Point.Y -ge $origin.Y -and $Point.Y -le ($origin.Y + $commands.ActualHeight)) {
+                return $true
+            }
+        }
+    } catch { $null = $_ }
+    return ($Window.ActualWidth -gt 150 -and $Point.X -ge ($Window.ActualWidth - 150))
+}
+
+function Add-NativeTitleBarHitTestHook {
+    param([MahApps.Metro.Controls.MetroWindow]$Window)
+    try {
+        $helper = [System.Windows.Interop.WindowInteropHelper]::new($Window)
+        $source = [System.Windows.Interop.HwndSource]::FromHwnd($helper.Handle)
+        if (-not $source) { return }
+        $key = $helper.Handle.ToInt64().ToString()
+        if ($script:TitleBarHitTestHooks.ContainsKey($key)) { return }
+        $script:TitleBarHitTestWindows[$key] = $Window
+        $hook = [System.Windows.Interop.HwndSourceHook]{
+            param([IntPtr]$hwnd, [int]$msg, [IntPtr]$wParam, [IntPtr]$lParam, [ref]$handled)
+            $WM_NCHITTEST = 0x0084; $HTCAPTION = 2
+            if ($msg -ne $WM_NCHITTEST) { return [IntPtr]::Zero }
+            try {
+                $target = $script:TitleBarHitTestWindows[$hwnd.ToInt64().ToString()]
+                if (-not $target) { return [IntPtr]::Zero }
+                $raw = $lParam.ToInt64()
+                $screenX = [int]($raw -band 0xffff); if ($screenX -ge 0x8000) { $screenX -= 0x10000 }
+                $screenY = [int](($raw -shr 16) -band 0xffff); if ($screenY -ge 0x8000) { $screenY -= 0x10000 }
+                $pt = $target.PointFromScreen([System.Windows.Point]::new($screenX, $screenY))
+                $titleBarH = Get-TitleBarDragHeight -Window $target
+                if ($pt.X -lt 0 -or $pt.X -gt $target.ActualWidth) { return [IntPtr]::Zero }
+                if ($pt.Y -lt 4 -or $pt.Y -gt $titleBarH) { return [IntPtr]::Zero }
+                if (Test-IsWindowCommandPoint -Window $target -Point $pt) { return [IntPtr]::Zero }
+                $handled.Value = $true
+                return [IntPtr]$HTCAPTION
+            } catch { return [IntPtr]::Zero }
+        }
+        $script:TitleBarHitTestHooks[$key] = $hook
+        $source.AddHook($hook)
+    } catch { $null = $_ }
+}
+
+function Remove-NativeTitleBarHitTestHook {
+    param([MahApps.Metro.Controls.MetroWindow]$Window)
+    try {
+        $helper = [System.Windows.Interop.WindowInteropHelper]::new($Window)
+        $key = $helper.Handle.ToInt64().ToString()
+        if ($script:TitleBarHitTestHooks.ContainsKey($key)) {
+            $source = [System.Windows.Interop.HwndSource]::FromHwnd($helper.Handle)
+            if ($source) { $source.RemoveHook($script:TitleBarHitTestHooks[$key]) }
+            $script:TitleBarHitTestHooks.Remove($key)
+        }
+        if ($script:TitleBarHitTestWindows.ContainsKey($key)) {
+            $script:TitleBarHitTestWindows.Remove($key)
+        }
+    } catch { $null = $_ }
+}
+
+function Install-TitleBarDragFallback {
+    param([MahApps.Metro.Controls.MetroWindow]$Window)
+    $Window.Add_SourceInitialized({ param($s, $e) Add-NativeTitleBarHitTestHook -Window $s })
+    $Window.Add_Closed({ param($s, $e) Remove-NativeTitleBarHitTestHook -Window $s })
+    $Window.Add_PreviewMouseLeftButtonDown({
+        param($s, $e)
+        try {
+            if ($s.WindowState -eq [System.Windows.WindowState]::Maximized) { return }
+            $titleBarH = Get-TitleBarDragHeight -Window $s
+            $pos = $e.GetPosition($s)
+            if ($pos.Y -lt 4 -or $pos.Y -gt $titleBarH) { return }
+            if (Test-IsWindowCommandPoint -Window $s -Point $pos) { return }
+            foreach ($ancestor in Get-InputAncestors -Start ($e.OriginalSource -as [System.Windows.DependencyObject])) {
+                if ($ancestor -is [System.Windows.Controls.Primitives.ButtonBase]) { return }
+            }
+            $s.DragMove()
+            $e.Handled = $true
+        } catch { $null = $_ }
+    })
+}
+
 Install-TitleBarDragFallback -Window $window
 
 # No window icon - the old .ico lacks transparency and doesn't fit the MahApps theme.
@@ -1980,16 +2155,36 @@ $btnCancelPipeline = $window.FindName('btnCancelPipeline')
 # ThemeManager touches the window).
 [ControlzEx.Theming.ThemeManager]::Current.ChangeTheme($window, "Dark.Steel")
 
-# Palette and button/label theming come from SuiteCommon.
+# Button color palettes
+$script:DarkButtonBg      = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#1E1E1E')
+$script:DarkButtonBorder  = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#555555')
+$script:LightWfBg         = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#0078D4')  # Windows blue
+$script:LightWfBorder     = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#006CBE')
+$script:LightOptBg        = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#0078D4')  # Same Windows blue
+$script:LightOptBorder    = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#006CBE')
+
 $script:WorkflowButtons = @($btnFullRun, $btnCheckLatest, $btnCheckMECM, $btnStage, $btnPackage)
 $script:OptionsButtons  = @($btnOptions)
 
-Initialize-SuiteTheme -Window $window `
-    -IsDarkGetter { $toggleTheme.IsOn -eq $true } `
-    -WorkflowButtons $script:WorkflowButtons `
-    -OptionsButtons $script:OptionsButtons `
-    -LogLabel $lblLogOutput
+# LOG OUTPUT label Foreground: #B0B0B0 passes AA on dark (#252525) at 7.07:1
+# but fails AA on light (#FFFFFF) at 2.17:1. Apply per theme instead of
+# hardcoding in XAML. See reference_srl_wpf_brand.md.
+$script:LogLabelDark  = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#B0B0B0')
+$script:LogLabelLight = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#595959')
 
+function Set-ButtonTheme {
+    param([bool]$IsDark)
+    if ($IsDark) {
+        foreach ($b in $script:WorkflowButtons) { $b.Background = $script:DarkButtonBg; $b.BorderBrush = $script:DarkButtonBorder }
+        foreach ($b in $script:OptionsButtons)  { $b.Background = $script:DarkButtonBg; $b.BorderBrush = $script:DarkButtonBorder }
+        if ($lblLogOutput) { $lblLogOutput.Foreground = $script:LogLabelDark }
+    }
+    else {
+        foreach ($b in $script:WorkflowButtons) { $b.Background = $script:LightWfBg;  $b.BorderBrush = $script:LightWfBorder }
+        foreach ($b in $script:OptionsButtons)  { $b.Background = $script:LightOptBg; $b.BorderBrush = $script:LightOptBorder }
+        if ($lblLogOutput) { $lblLogOutput.Foreground = $script:LogLabelLight }
+    }
+}
 
 function Set-DialogChromeFromOwner {
     # Applies the owner's theme to a child dialog and copies title bar +
@@ -2010,23 +2205,30 @@ function Set-DialogChromeFromOwner {
     } catch { }
 }
 
+$script:TitleBarBlue         = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#0078D4')
+$script:TitleBarBlueInactive = [System.Windows.Media.BrushConverter]::new().ConvertFrom('#4BA3E0')
 
 $toggleTheme.Add_Toggled({
     if ($toggleTheme.IsOn) {
         [ControlzEx.Theming.ThemeManager]::Current.ChangeTheme($window, "Dark.Steel")
         $txtThemeLabel.Text = "Dark Theme"
         Set-ButtonTheme -IsDark $true
+        # Reset title bar to theme default (Steel grey)
+        $window.ClearValue([MahApps.Metro.Controls.MetroWindow]::WindowTitleBrushProperty)
+        $window.ClearValue([MahApps.Metro.Controls.MetroWindow]::NonActiveWindowTitleBrushProperty)
     }
     else {
         [ControlzEx.Theming.ThemeManager]::Current.ChangeTheme($window, "Light.Blue")
         $txtThemeLabel.Text = "Light Theme"
         Set-ButtonTheme -IsDark $false
+        # Override title bar to exact Windows blue, active and inactive
+        $window.WindowTitleBrush = $script:TitleBarBlue
+        $window.NonActiveWindowTitleBrush = $script:TitleBarBlueInactive
     }
-    Update-TitleBarBrushes
 })
 
 # =============================================================================
-# DataGrid binding + filter
+# DataGrid binding
 # =============================================================================
 $dataGrid.ItemsSource = $script:PackagerData
 
@@ -2272,11 +2474,9 @@ $dataGrid.AddHandler(
 
         switch ($script:SelCycleState) {
             0 {
-                # Same visible-set rule as Select-OnlyUpdateAvailable: clear
-                # everywhere, select only what the filter shows.
                 foreach ($item in $script:PackagerData) { $item.Selected = $false }
                 foreach ($item in @($dataGrid.ItemsSource)) { $item.Selected = $true }
-                Add-LogLine -Message "Selected all visible rows."
+                Add-LogLine -Message "Selected all rows."
                 $colSelected.Header.Text = $script:SelCycleSymbolAll
                 $script:SelCycleState = 1
             }
@@ -2368,6 +2568,120 @@ $btnOptions.Add_Click({
 # 'Warning' | 'Error' | 'Question'). Returns 'OK' | 'Yes' | 'No' | 'Cancel'.
 # Inherits the parent window's theme.
 # =============================================================================
+function Show-ThemedMessage {
+    param(
+        [Parameter(Mandatory)]$Owner,
+        [Parameter(Mandatory)][string]$Title,
+        [Parameter(Mandatory)][string]$Message,
+        [ValidateSet('OK','YesNo')][string]$Buttons = 'OK',
+        [ValidateSet('Info','Warning','Error','Question')][string]$Icon = 'Info'
+    )
+
+    $glyph = switch ($Icon) {
+        'Info'     { 'i' }
+        'Warning'  { '!' }
+        'Error'    { 'X' }
+        'Question' { '?' }
+    }
+
+    $estLines = [math]::Max(1, [math]::Ceiling($Message.Length / 60.0))
+    $height   = [math]::Min(420, 180 + ($estLines * 22))
+
+    $xaml = @"
+<Controls:MetroWindow
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:Controls="clr-namespace:MahApps.Metro.Controls;assembly=MahApps.Metro"
+    Title="$Title"
+    Width="460" Height="$height"
+    MinWidth="360" MinHeight="160"
+    WindowStartupLocation="CenterOwner"
+    TitleCharacterCasing="Normal"
+    ShowIconOnTitleBar="False"
+    ResizeMode="NoResize"
+    GlowBrush="{DynamicResource MahApps.Brushes.Accent}"
+    BorderThickness="1">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/MahApps.Metro;component/Styles/Controls.xaml" />
+                <ResourceDictionary Source="pack://application:,,,/MahApps.Metro;component/Styles/Fonts.xaml" />
+                <ResourceDictionary Source="pack://application:,,,/MahApps.Metro;component/Styles/Themes/Dark.Steel.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+    <DockPanel Margin="16">
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0" x:Name="panelButtons"/>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="48"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Width="36" Height="36" CornerRadius="18"
+                    VerticalAlignment="Top" HorizontalAlignment="Left"
+                    Background="{DynamicResource MahApps.Brushes.Accent}">
+                <TextBlock Text="$glyph" FontSize="20" FontWeight="Bold"
+                           Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <TextBlock Grid.Column="1" x:Name="txtMessage"
+                       FontSize="13" TextWrapping="Wrap" VerticalAlignment="Top"
+                       Margin="4,2,0,0"/>
+        </Grid>
+    </DockPanel>
+</Controls:MetroWindow>
+"@
+
+    [xml]$xmlDoc = $xaml
+    $reader = New-Object System.Xml.XmlNodeReader $xmlDoc
+    $win = [System.Windows.Markup.XamlReader]::Load($reader)
+    Install-TitleBarDragFallback -Window $win
+
+    Set-DialogChromeFromOwner -Dialog $win -Owner $Owner
+
+    $win.FindName('txtMessage').Text = $Message
+    $panelButtons = $win.FindName('panelButtons')
+
+    $script:ThemedMessageResult = 'Cancel'
+
+    function New-ThemedMsgButton {
+        # $ParentWindow is passed explicitly so the Add_Click closure captures
+        # it as a function-local (rather than relying on dynamic scope lookup
+        # of $win from the outer function, which GetNewClosure does not do).
+        param(
+            [string]$Content,
+            [string]$ResultValue,
+            [bool]$IsDefault,
+            [bool]$IsCancel,
+            [bool]$IsAccent,
+            [Parameter(Mandatory)]$ParentWindow
+        )
+        $b = New-Object System.Windows.Controls.Button
+        $b.Content  = $Content
+        $b.MinWidth = 90
+        $b.Height   = 32
+        $b.Margin   = New-Object System.Windows.Thickness(0, 0, 8, 0)
+        $styleKey = if ($IsAccent) { 'MahApps.Styles.Button.Square.Accent' } else { 'MahApps.Styles.Button.Square' }
+        $b.SetResourceReference([System.Windows.Controls.Button]::StyleProperty, $styleKey)
+        [MahApps.Metro.Controls.ControlsHelper]::SetContentCharacterCasing($b, [System.Windows.Controls.CharacterCasing]::Normal)
+        if ($IsDefault) { $b.IsDefault = $true }
+        if ($IsCancel)  { $b.IsCancel  = $true }
+        $b.Add_Click({
+            $script:ThemedMessageResult = $ResultValue
+            $ParentWindow.Close()
+        }.GetNewClosure())
+        return $b
+    }
+
+    if ($Buttons -eq 'OK') {
+        [void]$panelButtons.Children.Add((New-ThemedMsgButton -Content 'OK'  -ResultValue 'OK'  -IsDefault $true  -IsCancel $true  -IsAccent $true  -ParentWindow $win))
+    } else {
+        [void]$panelButtons.Children.Add((New-ThemedMsgButton -Content 'Yes' -ResultValue 'Yes' -IsDefault $true  -IsCancel $false -IsAccent $true  -ParentWindow $win))
+        [void]$panelButtons.Children.Add((New-ThemedMsgButton -Content 'No'  -ResultValue 'No'  -IsDefault $false -IsCancel $true  -IsAccent $false -ParentWindow $win))
+    }
+
+    [void]$win.ShowDialog()
+    return $script:ThemedMessageResult
+}
 
 # =============================================================================
 # Options dialog - single master window with left-nav + right content pattern
@@ -2412,9 +2726,10 @@ function New-MecmPreferencesPanel {
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
     <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="140"/>
+        <ColumnDefinition Width="170"/>
         <ColumnDefinition Width="*"/>
     </Grid.ColumnDefinitions>
 
@@ -2427,11 +2742,8 @@ function New-MecmPreferencesPanel {
     <TextBlock Grid.Row="2" Grid.Column="0" Text="File Share Root:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8"/>
     <TextBox   Grid.Row="2" Grid.Column="1" x:Name="txtFS" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="UNC path to the SCCM content file share"/>
 
-    <TextBlock Grid.Row="3" Grid.Column="0" Text="Content Layout:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Share folder layout for packaged content. Applies to future Package runs; existing content stays where it is."/>
-    <ComboBox  Grid.Row="3" Grid.Column="1" x:Name="cboLayout" Width="360" FontSize="13" HorizontalAlignment="Left" Margin="0,0,0,8" ToolTip="Nested keeps an app's versions adjacent for easy retention pruning; Flat is one folder per package.">
-        <ComboBoxItem Content="Nested - Applications\Vendor\App\Version"/>
-        <ComboBoxItem Content="Flat - Applications\Vendor-App-Version"/>
-    </ComboBox>
+    <TextBlock Grid.Row="3" Grid.Column="0" Text="Application Share Pattern:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8"/>
+    <TextBox   Grid.Row="3" Grid.Column="1" x:Name="txtASP" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Application Share Pattern to create folder structure"/>
 
     <TextBlock Grid.Row="4" Grid.Column="0" Text="Download Root:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8"/>
     <TextBox   Grid.Row="4" Grid.Column="1" x:Name="txtDL" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Local folder where installers are downloaded during staging"/>
@@ -2454,14 +2766,14 @@ function New-MecmPreferencesPanel {
     <TextBlock Grid.Row="8" Grid.Column="0" Text="DP Group:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Exact name of the Distribution Point Group to target."/>
     <TextBox   Grid.Row="8" Grid.Column="1" x:Name="txtDPGroup" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Distribution Point Group display name (e.g. 'All DPs')"/>
 
-    <TextBlock Grid.Row="9" Grid.Column="0" Text="Test deployment:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Requires Auto-distribute enabled and a DP Group name. After content distribution, deploys the application (Available, immediately, default options) to the test collection."/>
-    <CheckBox  Grid.Row="9" Grid.Column="1" x:Name="chkTestDeploy" Content="Deploy to test collection after distribution" FontSize="13" VerticalAlignment="Center" Margin="0,0,0,8" Controls:ControlsHelper.ContentCharacterCasing="Normal"/>
+    <TextBlock Grid.Row="9" Grid.Column="0" Text="App Name Pattern:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Pattern for generating the MECM application name."/>
+    <TextBox   Grid.Row="9" Grid.Column="1" x:Name="txtANP" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Pattern for generating the MECM application name"/>
 
-    <TextBlock Grid.Row="10" Grid.Column="0" Text="Test collection:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Exact device collection name that receives the Available test deployment."/>
-    <TextBox   Grid.Row="10" Grid.Column="1" x:Name="txtTestCollection" FontSize="13" MaxLength="255" Margin="0,0,0,8" ToolTip="Device collection display name (e.g. 'App Test Devices')"/>
+    <TextBlock Grid.Row="10" Grid.Column="0" Text="PSAppDeployToolkit:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Path of the PSAppDeployToolkit for distribution."/>
+    <TextBox   Grid.Row="10" Grid.Column="1" x:Name="txtPSADT" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Path to the PSAppDeployToolkit"/>
 
-    <TextBlock Grid.Row="11" Grid.Column="0" Text="" Margin="0,0,0,8"/>
-    <CheckBox  Grid.Row="11" Grid.Column="1" x:Name="chkCreateTestColl" Content="Create collection if it does not exist" FontSize="13" VerticalAlignment="Center" Margin="0,0,0,8" Controls:ControlsHelper.ContentCharacterCasing="Normal" ToolTip="Creates an empty direct-membership device collection limited to All Systems when the named collection is missing."/>
+    <TextBlock Grid.Row="11" Grid.Column="0" Text="MECM Application Folder:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Path to the MECM application folder."/>
+    <TextBox   Grid.Row="11" Grid.Column="1" x:Name="txtMCMAppFolder" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Path to the MECM application folder"/>
 
     <TextBlock Grid.Row="12" Grid.Column="0" Text="Console:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,6,0,0" ToolTip="Configuration Manager Console (AdminUI) detection status. Checked once per launch."/>
     <TextBlock Grid.Row="12" Grid.Column="1" x:Name="txtConsoleStatus" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,6,0,0"/>
@@ -2487,47 +2799,33 @@ function New-MecmPreferencesPanel {
     $txtSC  = $element.FindName('txtSC')
     $txtProvider = $element.FindName('txtProvider')
     $txtFS  = $element.FindName('txtFS')
-    $cboLayout = $element.FindName('cboLayout')
+    $txtASP = $element.FindName('txtASP')
     $txtDL  = $element.FindName('txtDL')
     $txtEst = $element.FindName('txtEst')
     $txtMax = $element.FindName('txtMax')
     $chkAutoDist = $element.FindName('chkAutoDist')
     $txtDPGroup  = $element.FindName('txtDPGroup')
-    $chkTestDeploy     = $element.FindName('chkTestDeploy')
-    $txtTestCollection = $element.FindName('txtTestCollection')
-    $chkCreateTestColl = $element.FindName('chkCreateTestColl')
+    $txtANP      = $element.FindName('txtANP')
+    $txtPSADT    = $element.FindName('txtPSADT')
+    $txtMCMAppFolder   = $element.FindName('txtMCMAppFolder')
     $txtConsoleStatus  = $element.FindName('txtConsoleStatus')
     $txtSevenZipStatus = $element.FindName('txtSevenZipStatus')
     $txtIntuneWinStatus   = $element.FindName('txtIntuneWinStatus')
     $btnIntuneWinDownload = $element.FindName('btnIntuneWinDownload')
     $chkIntuneWin         = $element.FindName('chkIntuneWin')
 
-    $txtSC.Text  = [string]$script:Prefs.SiteCode
-    $txtProvider.Text = [string]$script:Prefs.ProviderMachineName
-    $txtFS.Text  = [string]$script:Prefs.FileShareRoot
-    $cboLayout.SelectedIndex = if ([string]$script:Prefs.ContentLayout -eq 'Flat') { 1 } else { 0 }
-    $txtDL.Text  = [string]$script:Prefs.DownloadRoot
-    $txtEst.Text = [string]$script:Prefs.EstimatedRuntimeMins
-    $txtMax.Text = [string]$script:Prefs.MaximumRuntimeMins
-    $chkAutoDist.IsChecked = [bool]$script:Prefs.ContentDistribution.AutoDistribute
-    $txtDPGroup.Text       = [string]$script:Prefs.ContentDistribution.DPGroupName
-    $chkTestDeploy.IsChecked     = [bool]$script:Prefs.ContentDistribution.DeployToTestCollection
-    $txtTestCollection.Text      = [string]$script:Prefs.ContentDistribution.TestCollectionName
-    $chkCreateTestColl.IsChecked = [bool]$script:Prefs.ContentDistribution.CreateTestCollectionIfMissing
-
-    # Test-deployment controls require auto-distribute + DP group: the
-    # deployment only runs after successful content distribution.
-    $updateTestDeployState = {
-        $distReady = [bool]$chkAutoDist.IsChecked -and -not [string]::IsNullOrWhiteSpace($txtDPGroup.Text)
-        $chkTestDeploy.IsEnabled     = $distReady
-        $txtTestCollection.IsEnabled = $distReady -and [bool]$chkTestDeploy.IsChecked
-        $chkCreateTestColl.IsEnabled = $distReady -and [bool]$chkTestDeploy.IsChecked
-    }.GetNewClosure()
-    & $updateTestDeployState
-    $chkAutoDist.Add_Click($updateTestDeployState)
-    $chkAutoDist.Add_Unchecked($updateTestDeployState)
-    $txtDPGroup.Add_TextChanged($updateTestDeployState)
-    $chkTestDeploy.Add_Click($updateTestDeployState)
+    $txtSC.Text             = [string]$script:Prefs.SiteCode
+    $txtProvider.Text       = [string]$script:Prefs.ProviderMachineName
+    $txtFS.Text             = [string]$script:Prefs.FileShareRoot
+    $txtASP.Text            = [string]$script:Prefs.ApplicationSharePattern
+    $txtDL.Text             = [string]$script:Prefs.DownloadRoot
+    $txtEst.Text            = [string]$script:Prefs.EstimatedRuntimeMins
+    $txtMax.Text            = [string]$script:Prefs.MaximumRuntimeMins
+    $chkAutoDist.IsChecked  = [bool]$script:Prefs.ContentDistribution.AutoDistribute
+    $txtANP.Text            = [string]$script:Prefs.AppNamePattern
+    $txtDPGroup.Text        = [string]$script:Prefs.ContentDistribution.DPGroupName
+    $txtPSADT.Text          = [string]$script:Prefs.PSAppDeployToolkitPath
+    $txtMCMAppFolder.Text   = [string]$script:Prefs.MECMApplicationFolder
 
     $cm = $script:Prefs.DetectedTools.ConfigMgrConsole
     if ($cm -and $cm.Found) {
@@ -2547,7 +2845,7 @@ function New-MecmPreferencesPanel {
         $txtSevenZipStatus.ToolTip = "Detected once per launch via registry ARP + Program Files\7-Zip"
     }
 
-    $chkIntuneWin.IsChecked = [bool]$script:Prefs.Intune.CreateIntuneWin
+        $chkIntuneWin.IsChecked = [bool]$script:Prefs.Intune.CreateIntuneWin
     $prefsRefIw = $script:Prefs
     $updateIntuneWinState = {
         $iw = $prefsRefIw.DetectedTools.IntuneWinAppUtil
@@ -2592,18 +2890,18 @@ function New-MecmPreferencesPanel {
         if (-not [int]::TryParse($txtEst.Text.Trim(), [ref]$estVal)) { $estVal = 15 }
         if (-not [int]::TryParse($txtMax.Text.Trim(), [ref]$maxVal)) { $maxVal = 30 }
 
-        $prefsRef.SiteCode             = $txtSC.Text.Trim()
-        $prefsRef.ProviderMachineName  = $txtProvider.Text.Trim()
-        $prefsRef.FileShareRoot        = $txtFS.Text.Trim()
-        $prefsRef.ContentLayout        = if ($cboLayout.SelectedIndex -eq 1) { 'Flat' } else { 'Nested' }
-        $prefsRef.DownloadRoot         = $txtDL.Text.Trim()
-        $prefsRef.EstimatedRuntimeMins = $estVal
-        $prefsRef.MaximumRuntimeMins   = $maxVal
+        $prefsRef.SiteCode                  = $txtSC.Text.Trim()
+        $prefsRef.ProviderMachineName       = $txtProvider.Text.Trim()
+        $prefsRef.FileShareRoot             = $txtFS.Text.Trim()
+        $prefsRef.ApplicationSharePattern   = $txtASP.Text.Trim()
+        $prefsRef.AppNamePattern            = $txtANP.Text.Trim()
+        $prefsRef.DownloadRoot              = $txtDL.Text.Trim()
+        $prefsRef.EstimatedRuntimeMins      = $estVal
+        $prefsRef.MaximumRuntimeMins        = $maxVal
         $prefsRef.ContentDistribution.AutoDistribute = [bool]$chkAutoDist.IsChecked
         $prefsRef.ContentDistribution.DPGroupName    = $txtDPGroup.Text.Trim()
-        $prefsRef.ContentDistribution.DeployToTestCollection        = [bool]$chkTestDeploy.IsChecked
-        $prefsRef.ContentDistribution.TestCollectionName            = $txtTestCollection.Text.Trim()
-        $prefsRef.ContentDistribution.CreateTestCollectionIfMissing = [bool]$chkCreateTestColl.IsChecked
+        $prefsRef.PSAppDeployToolkitPath             = $txtPSADT.Text.Trim()
+        $prefsRef.MECMApplicationFolder              = $txtMCMAppFolder.Text.Trim()
         $prefsRef.Intune.CreateIntuneWin = [bool]$chkIntuneWin.IsChecked
     }.GetNewClosure()
 
@@ -3448,7 +3746,7 @@ function Show-OptionsDialog {
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:Controls="clr-namespace:MahApps.Metro.Controls;assembly=MahApps.Metro"
     Title="Options"
-    Width="940" Height="640"
+    Width="940" Height="680"
     MinWidth="820" MinHeight="520"
     WindowStartupLocation="CenterOwner"
     TitleCharacterCasing="Normal"
@@ -3619,10 +3917,6 @@ function Invoke-RefreshGrid {
     else {
         $txtStatus.Text = ("Loaded {0} packager(s). Ready." -f $script:PackagerData.Count)
     }
-
-    # A rebuild replaces every row object; a filtered grid would otherwise
-    # keep showing the orphaned old rows.
-    Update-GridFilter
 }
 
 # =============================================================================
@@ -3707,12 +4001,17 @@ function Invoke-MultiAppPipeline {
 
     Initialize-BackgroundWorker
 
-    # Cancel any in-flight pipeline. BeginStop is best-effort and
-    # non-blocking; the stopping pipeline parks in the graveyard until it
-    # actually stops instead of freezing the UI thread on a stuck CM call.
-    $script:BgGraveyard = @(Stop-SuiteBgWork -PowerShell $script:BgPS -Timer $script:BgTimer -Graveyard $script:BgGraveyard)
-    $script:BgTimer  = $null
-    $script:BgPS     = $null
+    # Cancel any in-flight pipeline. Stop is best-effort; the current
+    # packager may still finish its current step before yielding.
+    if ($script:BgTimer) {
+        try { $script:BgTimer.Stop() } catch { $null = $_ }
+        $script:BgTimer = $null
+    }
+    if ($script:BgPS)    {
+        try { [void]$script:BgPS.Stop() } catch { $null = $_ }
+        try { $script:BgPS.Dispose() }   catch { $null = $_ }
+        $script:BgPS = $null
+    }
     $script:BgHandle = $null
     $script:BgState  = $null
 
@@ -3839,6 +4138,7 @@ function Invoke-MultiAppPipeline {
                                 -PackagerPath $path `
                                 -LogFolder $Ctx.LogFolder `
                                 -DownloadRoot $Ctx.DownloadRoot `
+                                -PSAppDeployToolkitPath $Ctx.PSAppDeployToolkitPath `
                                 -M365Channel $Ctx.M365Channel `
                                 -M365DeployMode $Ctx.M365DeployMode `
                                 -SevenZipPath $Ctx.SevenZipPath
@@ -3881,11 +4181,15 @@ function Invoke-MultiAppPipeline {
                             $res = Invoke-PackagerPackage `
                                 -PackagerPath $path `
                                 -SiteCode $Ctx.SiteCode `
+                                -MECMApplicationFolder $Ctx.MECMApplicationFolder `
                                 -ProviderMachineName $Ctx.ProviderMachineName `
                                 -Comment $Ctx.Comment `
                                 -FileServerPath $Ctx.FileShareRoot `
+                                -ApplicationSharePattern $Ctx.ApplicationSharePattern `
+                                -AppNamePattern $Ctx.AppNamePattern `
                                 -LogFolder $Ctx.LogFolder `
                                 -DownloadRoot $Ctx.DownloadRoot `
+                                -PSAppDeployToolkitPath $Ctx.PSAppDeployToolkitPath `
                                 -M365Channel $Ctx.M365Channel `
                                 -M365DeployMode $Ctx.M365DeployMode `
                                 -EstimatedRuntimeMins $Ctx.EstimatedRuntimeMins `
@@ -3893,7 +4197,6 @@ function Invoke-MultiAppPipeline {
                                 -SevenZipPath $Ctx.SevenZipPath `
                                 -CreateIntuneWin:([bool]$Ctx.IntuneWinCreate) `
                                 -IntuneWinToolPath ([string]$Ctx.IntuneWinToolPath) `
-                                -ContentLayout ([string]$Ctx.ContentLayout)
 
                             if ($res.ExitCode -eq 0) {
                                 $row.Status = 'Packaged'
@@ -4068,6 +4371,7 @@ function Invoke-MultiAppPipeline {
                                 -PackagerPath $path `
                                 -LogFolder $Ctx.LogFolder `
                                 -DownloadRoot $Ctx.DownloadRoot `
+                                -PSAppDeployToolkitPath $Ctx.PSAppDeployToolkitPath `
                                 -M365Channel $Ctx.M365Channel `
                                 -M365DeployMode $Ctx.M365DeployMode `
                                 -SevenZipPath $Ctx.SevenZipPath
@@ -4117,19 +4421,22 @@ function Invoke-MultiAppPipeline {
                             $pkg = Invoke-PackagerPackage `
                                 -PackagerPath $path `
                                 -SiteCode $Ctx.SiteCode `
+                                -MECMApplicationFolder $Ctx.MECMApplicationFolder `
                                 -ProviderMachineName $Ctx.ProviderMachineName `
                                 -Comment $Ctx.Comment `
                                 -FileServerPath $Ctx.FileShareRoot `
+                                -ApplicationSharePattern $Ctx.ApplicationSharePattern `
+                                -AppNamePattern $Ctx.AppNamePattern `
                                 -LogFolder $Ctx.LogFolder `
                                 -DownloadRoot $Ctx.DownloadRoot `
+                                -PSAppDeployToolkitPath $Ctx.PSAppDeployToolkitPath `
                                 -M365Channel $Ctx.M365Channel `
                                 -M365DeployMode $Ctx.M365DeployMode `
                                 -EstimatedRuntimeMins $Ctx.EstimatedRuntimeMins `
                                 -MaximumRuntimeMins $Ctx.MaximumRuntimeMins `
-                                -SevenZipPath $Ctx.SevenZipPath `
+                                -SevenZipPath $Ctx.SevenZipPath
                                 -CreateIntuneWin:([bool]$Ctx.IntuneWinCreate) `
                                 -IntuneWinToolPath ([string]$Ctx.IntuneWinToolPath) `
-                                -ContentLayout ([string]$Ctx.ContentLayout)
 
                             if ($pkg.ExitCode -eq 0) {
                                 $row.Status = 'Packaged'
@@ -4428,6 +4735,8 @@ $btnStage.Add_Click({
     $txtStatus.Text = "Staging selected packages..."
     Invoke-MultiAppPipeline -Operation Stage -Rows $selectedRows -Context @{
         DownloadRoot   = $dlRootValue
+        PSAppDeployToolkitPath = $script:Prefs.PSAppDeployToolkitPath
+        AppNamePattern = $script:Prefs.AppNamePattern
         M365Channel    = $script:Prefs.M365Channel
         M365DeployMode = $script:Prefs.M365DeployMode
         LogFolder      = Join-Path $PSScriptRoot 'Logs'
@@ -4468,18 +4777,21 @@ $btnPackage.Add_Click({
 
     $txtStatus.Text = "Packaging selected applications..."
     Invoke-MultiAppPipeline -Operation Package -Rows $selectedRows -Context @{
-        SiteCode             = $siteCodeValue
-        ProviderMachineName  = $script:Prefs.ProviderMachineName
-        Comment              = $txtComment.Text.Trim()
-        FileShareRoot        = $fsPathValue
-        ContentLayout        = $script:Prefs.ContentLayout
-        DownloadRoot         = $script:Prefs.DownloadRoot
-        M365Channel          = $script:Prefs.M365Channel
-        M365DeployMode       = $script:Prefs.M365DeployMode
-        EstimatedRuntimeMins = $script:Prefs.EstimatedRuntimeMins
-        MaximumRuntimeMins   = $script:Prefs.MaximumRuntimeMins
-        LogFolder            = Join-Path $PSScriptRoot 'Logs'
-        SevenZipPath         = Get-SevenZipPathForContext
+        SiteCode                = $siteCodeValue
+        ProviderMachineName     = $script:Prefs.ProviderMachineName
+        MECMApplicationFolder   = $script:Prefs.MECMApplicationFolder
+        Comment                 = $txtComment.Text.Trim()
+        FileShareRoot           = $fsPathValue
+        ApplicationSharePattern = $script:Prefs.ApplicationSharePattern
+        AppNamePattern          = $script:Prefs.AppNamePattern
+        DownloadRoot            = $script:Prefs.DownloadRoot
+        PSAppDeployToolkitPath  = $script:Prefs.PSAppDeployToolkitPath
+        M365Channel             = $script:Prefs.M365Channel
+        M365DeployMode          = $script:Prefs.M365DeployMode
+        EstimatedRuntimeMins    = $script:Prefs.EstimatedRuntimeMins
+        MaximumRuntimeMins      = $script:Prefs.MaximumRuntimeMins
+        LogFolder               = Join-Path $PSScriptRoot 'Logs'
+        SevenZipPath            = Get-SevenZipPathForContext
         IntuneWinCreate      = ([bool]$script:Prefs.Intune.CreateIntuneWin -and -not [string]::IsNullOrWhiteSpace((Get-IntuneWinToolPathForContext)))
         IntuneWinToolPath    = Get-IntuneWinToolPathForContext
     }
@@ -4560,7 +4872,6 @@ $btnFullRun.Add_Click({
         Overrides            = $script:Prefs.AppFlow.CadenceOverrides
         Comment              = $txtComment.Text.Trim()
         FileShareRoot        = $fsPathValue
-        ContentLayout        = $script:Prefs.ContentLayout
         DownloadRoot         = $dlRootValue
         M365Channel          = $script:Prefs.M365Channel
         M365DeployMode       = $script:Prefs.M365DeployMode
@@ -4584,19 +4895,25 @@ $window.Add_Loaded({
 })
 
 $window.Add_Closing({
-    Save-WindowState -Window $window -Path (Get-WindowStatePath) -ExtraState @{
-        DarkTheme    = ($toggleTheme.IsOn -eq $true)
-        DebugColumns = ($toggleDebugCols.IsOn -eq $true)
-    }
+    Save-WindowState -Window $window
 
-    # Tear down the async pipeline without blocking shutdown: a stuck
-    # pipeline stops asynchronously and the runspace closes async so the
-    # bg thread cannot keep the process alive or freeze the close.
-    $script:BgGraveyard = @(Stop-SuiteBgWork -PowerShell $script:BgPS -Timer $script:BgTimer -Graveyard $script:BgGraveyard)
-    $script:BgTimer = $null
-    $script:BgPS    = $null
-    Close-SuiteBgRunspace -Runspace $script:BgRunspace
-    $script:BgRunspace = $null
+    # Dispose the async pipeline runspace so the bg thread doesn't keep
+    # the process alive after the window closes. Per
+    # reference_wpf_async_progress_overlay.md.
+    if ($script:BgTimer) {
+        try { $script:BgTimer.Stop() } catch { $null = $_ }
+        $script:BgTimer = $null
+    }
+    if ($script:BgPS)    {
+        try { [void]$script:BgPS.Stop() } catch { $null = $_ }
+        try { $script:BgPS.Dispose() }   catch { $null = $_ }
+        $script:BgPS = $null
+    }
+    if ($script:BgRunspace) {
+        try { $script:BgRunspace.Close() }   catch { $null = $_ }
+        try { $script:BgRunspace.Dispose() } catch { $null = $_ }
+        $script:BgRunspace = $null
+    }
     $script:BgHandle = $null
     $script:BgState  = $null
 })
@@ -4606,11 +4923,7 @@ $script:SavedDarkTheme = $true
 $script:SavedDebugCols = $false
 
 # Restore previous window position + saved preferences
-Restore-WindowState -Window $window -Path (Get-WindowStatePath) -OnStateLoaded {
-    param($s)
-    $script:SavedDarkTheme = if ($null -ne $s.DarkTheme) { [bool]$s.DarkTheme } else { $true }
-    $script:SavedDebugCols = if ($null -ne $s.DebugColumns) { [bool]$s.DebugColumns } else { $false }
-}
+Restore-WindowState -Window $window
 
 # Apply saved theme and debug column state
 if (-not $script:SavedDarkTheme) {
