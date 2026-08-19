@@ -1,6 +1,6 @@
 @{
     RootModule        = 'AppPackagerCommon.psm1'
-    ModuleVersion     = '0.0.13'
+    ModuleVersion     = '0.0.11'
     GUID              = 'f5cdd2d6-eb09-47bd-8493-16dfd5666455'
     Author            = 'AppPackager'
     Description       = 'Shared helpers for AppPackager packager scripts.'
@@ -8,8 +8,12 @@
 
     FunctionsToExport = @(
         # Logging
+        'Initialize-Logging'
+        'Write-Log'
+        'Write-LogErrorRecord'
 
         # Download
+        'Get-PageContentWithFallback'
         'Invoke-DownloadWithRetry'
 
         # Environment / pre-flight
@@ -20,7 +24,7 @@
 
         # Network path
         'Get-NetworkAppRoot'
-        'Get-NetworkContentPath'
+        'Publish-StagedContentToNetwork'
 
         # MSI / ARP
         'Get-MsiPropertyMap'
@@ -31,6 +35,7 @@
         'Compare-StageFileHashes'
         'Write-StageManifest'
         'Read-StageManifest'
+        'Update-StageManifest'
 
         # Content wrappers
         'Write-ContentWrappers'
@@ -41,12 +46,6 @@
         # MECM
         'New-MECMApplicationFromManifest'
         'Remove-CMApplicationRevisionHistoryByCIId'
-        'Get-NextPatchVersion'
-        'Test-PsadtLayout'
-
-        # Intune Win32 content prep
-        'Install-IntuneWinAppUtil'
-        'New-IntuneWinPackage'
 
         # Preferences
         'Get-PackagerPreferences'
@@ -63,6 +62,10 @@
         'Read-PackagerHistory'
         'Save-PackagerHistory'
         'Update-PackagerHistory'
+
+        # Language code helpers
+        'Get-LanguageCode'
+        'Get-LanguageFromCode'
     )
 
     CmdletsToExport   = @()

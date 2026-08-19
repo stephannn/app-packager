@@ -1,4 +1,4 @@
-﻿<#
+<#
 Vendor: JGraph Ltd
 App: draw.io
 CMName: draw.io
@@ -50,16 +50,19 @@ DownloadPageUrl: https://github.com/jgraph/drawio-desktop/releases
     - PowerShell 5.1
     - ConfigMgr Admin Console installed
     - RBAC permissions to create Applications and Deployment Types
+    - Local administrator
     - Write access to FileServerPath
 #>
 
 param(
     [string]$SiteCode = "MCM",
+    [string]$MECMApplicationFolder = "",
     [string]$Comment = "",
     [string]$FileServerPath = "\\fileserver\sccm$",
-    [ValidateSet('Nested','Flat')]
-    [string]$ContentLayout = "Nested",
+    [string]$ApplicationSharePattern = "Applications\{ProductName}\{Version}",
+    [string]$AppNamePattern = "{AppName} - {SoftwareVersion}",
     [string]$DownloadRoot = "C:\temp\ap",
+    [String]$PSAppDeployToolkitPath = "",
     [int]$EstimatedRuntimeMins = 15,
     [int]$MaximumRuntimeMins = 30,
     [string]$LogPath,
@@ -80,11 +83,12 @@ if ($StageOnly -and $PackageOnly) {
 
 # --- Configuration ---
 $GitHubApiUrl = "https://api.github.com/repos/jgraph/drawio-desktop/releases/latest"
+$DownloadIconUrl = "https://raw.githubusercontent.com/jgraph/drawio-desktop/6937156737666a80196217478766d11f8c1a71c7/build/96x96.png"
 
-$VendorFolder = "JGraph"
-$AppFolder    = "draw.io"
+$Publisher      = "JGraph"
+$AppName        = "draw.io"
 
-$BaseDownloadRoot = Join-Path $DownloadRoot "draw.io"
+$BaseDownloadRoot = Join-Path $DownloadRoot $AppName
 
 # --- Functions ---
 
@@ -95,8 +99,10 @@ function Get-LatestDrawioRelease {
     Write-Log "GitHub releases API          : $GitHubApiUrl" -Quiet:$Quiet
 
     try {
-        $json = (curl.exe -L --fail --silent --show-error $GitHubApiUrl) -join ''
-        if ($LASTEXITCODE -ne 0) { throw "Failed to query GitHub releases API." }
+        $json = Get-PageContentWithFallback -Url $GitHubApiUrl -Quiet:$Quiet
+        if ([string]::IsNullOrWhiteSpace($json)) {
+            throw "Could not retrieve $GitHubApiUrl using either Invoke-WebRequest or curl.exe."
+        }
 
         $release = ConvertFrom-Json $json
         $version = $release.tag_name -replace '^v', ''
@@ -128,6 +134,10 @@ function Invoke-StageDrawio {
     Write-Log ("=" * 60)
     Write-Log ""
 
+    if (-not (Test-IsAdmin)) {
+        Write-Log "Run PowerShell as Administrator." -Level WARN
+    }
+
     Initialize-Folder -Path $BaseDownloadRoot
 
     $releaseInfo = Get-LatestDrawioRelease
@@ -153,6 +163,21 @@ function Invoke-StageDrawio {
     else {
         Write-Log "Local MSI exists. Skipping download."
     }
+
+    if($DownloadIconUrl){
+        Write-Log "Downloading ICO..."
+        try {
+            $localIco = ([IO.Path]::Combine($BaseDownloadRoot, $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl))))
+            Invoke-DownloadWithRetry -Url $DownloadIconUrl -OutFile $localIco
+        }
+        catch {
+            Write-Log "Failed to download ICO: $($_.Exception.Message)" -Level WARN
+            $localIco = ""
+        }
+    }
+
+    Write-Log ""
+    Write-Log "PSAppDeployToolkitPath: $PSAppDeployToolkitPath"
 
     # --- Extract MSI properties ---
     $props = Get-MsiPropertyMap -MsiPath $localMsi
@@ -181,6 +206,14 @@ function Invoke-StageDrawio {
     else {
         Write-Log "Staged MSI exists. Skipping copy."
     }
+    if(-not (Test-Path -LiteralPath (Join-Path $localContentPath ([System.IO.Path]::GetFileName($localIco))))) {
+        Copy-Item -LiteralPath $localIco -Destination (Join-Path $localContentPath ([System.IO.Path]::GetFileName($localIco))) -Force -ErrorAction Stop
+        Write-Log "Copied ICO to staged folder  : $localContentPath"
+    }
+    else {
+        Write-Log "Staged ICO exists. Skipping copy."
+
+    }
 
     # --- Derive ARP detection from MSI properties ---
     $arpRegistryKey = "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\" + $productCode
@@ -188,21 +221,23 @@ function Invoke-StageDrawio {
     Write-Log "ARP DisplayVersion           : $productVersionRaw"
     Write-Log ""
 
-    # --- Generate content wrappers ---
-    $wrapperContent = New-MsiWrapperContent -MsiFileName $MsiFileName
-    Write-ContentWrappers -OutputPath $localContentPath `
-        -InstallPs1Content $wrapperContent.Install `
-        -UninstallPs1Content $wrapperContent.Uninstall
+    if([string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $true -or (Test-Path -LiteralPath $PSAppDeployToolkitPath) -eq $false) {
+        # --- Generate content wrappers ---
+        $wrapperContent = New-MsiWrapperContent -MsiFileName $MsiFileName
+        Write-ContentWrappers -OutputPath $localContentPath `
+            -InstallPs1Content $wrapperContent.Install `
+            -UninstallPs1Content $wrapperContent.Uninstall
+    }
 
     # --- Write stage manifest ---
-    $publisher = "JGraph Ltd"
-    $appName = "draw.io $productVersionRaw"
-
     $manifestPath = Join-Path $localContentPath "stage-manifest.json"
     Write-StageManifest -Path $manifestPath -ManifestData @{
-        AppName         = $appName
-        Publisher       = $publisher
+        AppName         = $AppName
+        DisplayName     = $AppName
+        Publisher       = $Publisher
         SoftwareVersion = $productVersionRaw
+        Architecture    = "x64"
+        Language        = "MUI"
         InstallerFile   = $MsiFileName
         InstallerType   = "MSI"
         InstallArgs     = "/qn /norestart"
@@ -216,6 +251,7 @@ function Invoke-StageDrawio {
             ExpectedValue       = $productVersionRaw
             Is64Bit             = $true
         }
+        IconFileName    = if(Test-Path -LiteralPath $localIco) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
     }
 
     Set-Content -LiteralPath (Join-Path $BaseDownloadRoot "staged-version.txt") -Value $productVersionRaw -Encoding ASCII -ErrorAction Stop
@@ -238,6 +274,10 @@ function Invoke-PackageDrawio {
     Write-Log ("=" * 60)
     Write-Log ""
 
+    if (-not (Test-IsAdmin)) {
+        Write-Log "Run PowerShell as Administrator." -Level WARN
+    }
+
     Initialize-Folder -Path $BaseDownloadRoot
 
     $versionFile = Join-Path $BaseDownloadRoot "staged-version.txt"
@@ -257,33 +297,34 @@ function Invoke-PackageDrawio {
     Write-Log "Detection Key                : $($manifest.Detection.RegistryKeyRelative)"
     Write-Log ""
 
+    # --- Network share ---
     if (-not (Test-NetworkShareAccess -Path $FileServerPath)) {
         throw "Network root path not accessible: $FileServerPath"
     }
 
-    $networkContentPath = Get-NetworkContentPath -FileServerPath $FileServerPath -VendorFolder $VendorFolder -AppFolder $AppFolder -Version $manifest.SoftwareVersion -Layout $ContentLayout
+    $publish = Publish-StagedContentToNetwork `
+        -FileServerPath $FileServerPath `
+        -PathPattern $ApplicationSharePattern `
+        -Manifest $manifest `
+        -LocalContentPath $localContentPath `
+        -ManifestPath $manifestPath `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
+        -SkipStageManifestCopy
 
-    Write-Log "Network content path         : $networkContentPath"
-    Write-Log ""
+    $networkAppRoot = $publish.NetworkAppRoot
+    $networkContentPath = $publish.NetworkContentPath
+    $manifest = $publish.Manifest
 
-    $localFiles = Get-ChildItem -Path $localContentPath -File -ErrorAction Stop
-    foreach ($f in $localFiles) {
-        if ($f.Name -eq "stage-manifest.json") { continue }
-        $dest = Join-Path $networkContentPath $f.Name
-        if (-not (Test-Path -LiteralPath $dest)) {
-            Copy-Item -LiteralPath $f.FullName -Destination $dest -Force -ErrorAction Stop
-            Write-Log "Copied to network            : $($f.Name)"
-        }
-        else {
-            Write-Log "Already on network           : $($f.Name)"
-        }
-    }
-
+    Write-Log "Starting to create MECM application..."
+    # --- MECM application ---
     New-MECMApplicationFromManifest `
         -Manifest $manifest `
+        -AppNamePattern $AppNamePattern `
         -SiteCode $SiteCode `
+        -MCMAppFolder $MECMApplicationFolder `
         -Comment $Comment `
-        -NetworkContentPath $networkContentPath `
+        -NetworkContentPath $networkAppRoot `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
         -EstimatedRuntimeMins $EstimatedRuntimeMins `
         -MaximumRuntimeMins $MaximumRuntimeMins
 }

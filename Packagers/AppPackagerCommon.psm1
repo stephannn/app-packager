@@ -25,44 +25,230 @@
 #>
 
 # ---------------------------------------------------------------------------
-# Shared core
+# Logging
 # ---------------------------------------------------------------------------
 
-# SuiteCommon (vendored at ..\Lib\SuiteCommon) supplies logging, settings,
-# and the CM connection core. Guarded, not -Force: a -Force reimport of
-# this module (background runspace init) must not reset SuiteCommon's
-# attached logging state.
-if (-not (Get-Module -Name SuiteCommon)) {
-    Import-Module -Name (Join-Path $PSScriptRoot '..\Lib\SuiteCommon\SuiteCommon.psd1') -Global -DisableNameChecking
+$script:__AppPackagerLogPath = $null
+$script:__AppPackagerVerbose = $false
+
+function Initialize-Logging {
+    param(
+        [string]$LogPath,
+        [switch]$VerboseLogging
+    )
+
+    $script:__AppPackagerLogPath = $LogPath
+
+    # Verbose diagnostics: explicit switch wins; otherwise the
+    # APP_PACKAGER_VERBOSE env var enables it (set by the GUI host or the
+    # operator's shell) unless it holds an explicit "off" value.
+    $envVerbose = $env:APP_PACKAGER_VERBOSE
+    $script:__AppPackagerVerbose = [bool]$VerboseLogging -or
+        (-not [string]::IsNullOrWhiteSpace($envVerbose) -and $envVerbose -notin @('0', 'false', 'no'))
+
+    if ($LogPath) {
+        $parentDir = Split-Path -Path $LogPath -Parent
+        if ($parentDir -and -not (Test-Path -LiteralPath $parentDir)) {
+            New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+        }
+
+        $header = "[{0}] [INFO ] === Log initialized ===" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        Set-Content -LiteralPath $LogPath -Value $header -Encoding UTF8
+    }
+
+    if ($script:__AppPackagerVerbose) {
+        Write-Log "Verbose logging enabled (DEBUG lines on console and in log file)." -Level DEBUG
+    }
 }
-# Packager scripts and operators set APP_PACKAGER_VERBOSE; SuiteCommon
-# gates DEBUG on SUITE_VERBOSE. Bridge once at import.
-if (-not [string]::IsNullOrWhiteSpace($env:APP_PACKAGER_VERBOSE) -and [string]::IsNullOrWhiteSpace($env:SUITE_VERBOSE)) {
-    $env:SUITE_VERBOSE = $env:APP_PACKAGER_VERBOSE
+
+function Write-Log {
+    <#
+    .SYNOPSIS
+        Writes a timestamped, severity-tagged log message.
+
+    .DESCRIPTION
+        INFO  -> Write-Host (stdout)
+        WARN  -> Write-Host (stdout)
+        ERROR -> Write-Host (stdout) + $host.UI.WriteErrorLine (stderr)
+        DEBUG -> log file always; Write-Host (stdout) only when verbose
+                 logging is enabled (Initialize-Logging -VerboseLogging or
+                 APP_PACKAGER_VERBOSE env var).
+
+        -Quiet suppresses all console output but still writes to the log file.
+    #>
+    param(
+        [AllowEmptyString()]
+        [Parameter(Mandatory, Position = 0)]
+        [string]$Message,
+
+        [ValidateSet('INFO', 'WARN', 'ERROR', 'DEBUG')]
+        [string]$Level = 'INFO',
+
+        [switch]$Quiet
+    )
+
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $formatted = "[{0}] [{1,-5}] {2}" -f $timestamp, $Level, $Message
+
+    $suppressConsole = $Quiet -or ($Level -eq 'DEBUG' -and -not $script:__AppPackagerVerbose)
+
+    if (-not $suppressConsole) {
+        Write-Host $formatted
+
+        if ($Level -eq 'ERROR') {
+            $host.UI.WriteErrorLine($formatted)
+        }
+    }
+
+    if ($script:__AppPackagerLogPath) {
+        Add-Content -LiteralPath $script:__AppPackagerLogPath -Value $formatted -Encoding UTF8 -ErrorAction SilentlyContinue
+    }
+}
+
+function Write-LogErrorRecord {
+    <#
+    .SYNOPSIS
+        Logs full diagnostics for an ErrorRecord: exception chain, error id,
+        failing file/line/statement, and the script stack trace.
+
+    .DESCRIPTION
+        Designed for catch blocks. The InvocationInfo position and
+        ScriptStackTrace identify the exact line of code that threw, which a
+        bare $_.Exception.Message ("SCRIPT FAILED: Key cannot be null...")
+        never reveals.
+
+    .PARAMETER Level
+        Log level for the diagnostic lines. Default ERROR. Pass DEBUG when the
+        caller already emits its own single ERROR summary line and the detail
+        should only land in the log file (unless verbose logging is enabled).
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [System.Management.Automation.ErrorRecord]$ErrorRecord,
+
+        [string]$Context = '',
+
+        [ValidateSet('ERROR', 'WARN', 'DEBUG')]
+        [string]$Level = 'ERROR'
+    )
+
+    if ($Context) {
+        Write-Log ("Failure context              : {0}" -f $Context) -Level $Level
+    }
+
+    $ex = $ErrorRecord.Exception
+    if ($ex) {
+        Write-Log ("Exception                    : {0}: {1}" -f $ex.GetType().FullName, $ex.Message) -Level $Level
+        $inner = $ex.InnerException
+        while ($inner) {
+            Write-Log ("Inner exception              : {0}: {1}" -f $inner.GetType().FullName, $inner.Message) -Level $Level
+            $inner = $inner.InnerException
+        }
+    }
+
+    Write-Log ("FullyQualifiedErrorId        : {0}" -f $ErrorRecord.FullyQualifiedErrorId) -Level $Level
+
+    $ii = $ErrorRecord.InvocationInfo
+    if ($ii) {
+        if ($ii.ScriptName) {
+            Write-Log ("Failing location             : {0}:{1}" -f $ii.ScriptName, $ii.ScriptLineNumber) -Level $Level
+        }
+        if ($ii.Line) {
+            Write-Log ("Failing statement            : {0}" -f $ii.Line.Trim()) -Level $Level
+        }
+    }
+
+    if ($ErrorRecord.ScriptStackTrace) {
+        foreach ($frame in ($ErrorRecord.ScriptStackTrace -split "`r?`n")) {
+            Write-Log ("Stack                        : {0}" -f $frame) -Level $Level
+        }
+    }
 }
 
 # ---------------------------------------------------------------------------
-# Download with retry
+# Download and page retrieval helpers
 # ---------------------------------------------------------------------------
+
+function Get-PageContentWithFallback {
+    <#
+    .SYNOPSIS
+        Fetches a web page using Invoke-WebRequest with curl.exe fallback.
+
+    .DESCRIPTION
+        Shared helper for page scraping and metadata discovery. This keeps
+        script-specific logic thin while preserving the same fallback behavior
+        used across the packager set.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Url,
+
+        [string[]]$ExtraCurlArgs = @(),
+
+        [switch]$Quiet
+    )
+
+    try {
+        try {
+            Write-Log "Trying Invoke-WebRequest..." -Quiet:$Quiet
+
+            $response = Invoke-WebRequest `
+                -Uri $Url `
+                -UseBasicParsing `
+                -ErrorAction Stop
+
+            return $response.Content
+        }
+        catch {
+            Write-Log "Invoke-WebRequest failed: $($_.Exception.Message)" -Level WARN -Quiet:$Quiet
+
+            try {
+                Write-Log "Trying curl.exe as fallback..." -Level WARN -Quiet:$Quiet
+
+                $allArgs = @(
+                    '-L',
+                    '--fail',
+                    '--silent',
+                    '--show-error'
+                ) + $ExtraCurlArgs + @(
+                    $Url
+                )
+
+                $content = (& curl.exe @allArgs) -join "`n"
+
+                if ($LASTEXITCODE -ne 0) {
+                    throw "curl.exe exited with code $LASTEXITCODE"
+                }
+
+                return $content
+            }
+            catch {
+                throw "Could not retrieve $Url using either Invoke-WebRequest or curl.exe."
+            }
+        }
+    }
+    catch {
+        Write-Log "Failed to retrieve web page: $($_.Exception.Message)" -Level ERROR -Quiet:$Quiet
+        return $null
+    }
+}
 
 function Invoke-DownloadWithRetry {
     <#
     .SYNOPSIS
-        Downloads a file via curl.exe, falling back to Invoke-WebRequest, with
-        a single retry on failure.
+        Downloads a file via Invoke-WebRequest with curl.exe fallback and retry logic.
 
     .DESCRIPTION
-        curl.exe is primary (curl.exe -L --fail --silent --show-error -o <file> <url>):
-        the in-box Schannel build trusts the Windows certificate store and
-        negotiates modern TLS regardless of per-machine .NET registry state.
+        Attempts to download the file using Invoke-WebRequest first.
+        If Invoke-WebRequest fails, curl.exe is used as a fallback.
 
-        When curl fails, the attempt falls back to Invoke-WebRequest, which
-        discovers WinINET/system proxy settings curl does not read. The
-        fallback sends default credentials to the system proxy (Kerberos/NTLM
-        auth proxies) and suppresses the 5.1 progress bar that cripples
-        download throughput. TLS 1.2 is forced at module import.
+        Each attempt consists of:
+        1. Invoke-WebRequest
+        2. curl.exe if Invoke-WebRequest fails
 
-        Throws on final failure (both methods, all attempts).
+        Retries the complete download operation according to RetryCount.
+
+        Throws on final failure.
 
         Does NOT wrap scraping/variable-capture calls or URL-resolution calls.
     #>
@@ -85,59 +271,96 @@ function Invoke-DownloadWithRetry {
     $maxAttempts = 1 + $RetryCount
 
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+
         if ($attempt -gt 1) {
-            Write-Log ("Retrying download (attempt {0} of {1}) after {2}s delay..." -f $attempt, $maxAttempts, $RetryDelaySec) -Level WARN -Quiet:$Quiet
+            Write-Log (
+                "Retrying download (attempt {0} of {1}) after {2}s delay..." -f
+                $attempt,
+                $maxAttempts,
+                $RetryDelaySec
+            ) -Level WARN -Quiet:$Quiet
+
             Start-Sleep -Seconds $RetryDelaySec
         }
 
-        $allArgs = @('-L', '--fail', '--silent', '--show-error') + $ExtraCurlArgs + @('-o', $OutFile, $Url)
-        & curl.exe @allArgs 2>$null
-        $exitCode = $LASTEXITCODE
-
-        if ($exitCode -eq 0) {
-            return
-        }
-
-        Write-Log ("curl.exe failed (exit code {0}); falling back to Invoke-WebRequest." -f $exitCode) -Level WARN -Quiet:$Quiet
-
-        # curl leaves a partial file when the transfer dies mid-stream; remove
-        # it so a fallback/retry never passes integrity checks with torn content.
-        if (Test-Path -LiteralPath $OutFile) {
-            Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
-        }
-
-        $savedProgress = $ProgressPreference
+        # ------------------------------------------------------------
+        # First try: Invoke-WebRequest
+        # ------------------------------------------------------------
         try {
-            # Authenticated system proxies (the environments where curl fails)
-            # reject anonymous CONNECT; hand the default proxy our credentials.
-            [System.Net.WebRequest]::DefaultWebProxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
+            Write-Log "Downloading with Invoke-WebRequest: $Url" -Quiet:$Quiet
 
-            # 5.1 redraws the progress bar per buffer read; silencing it is the
-            # difference between KB/s and full line speed on large installers.
             $ProgressPreference = 'SilentlyContinue'
+            Invoke-WebRequest `
+                -Uri $Url `
+                -OutFile $OutFile `
+                -ErrorAction Stop
+            $ProgressPreference = 'Continue'
 
-            Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+            if (Test-Path -LiteralPath $OutFile) {
+                Write-Log "Download successful using Invoke-WebRequest: $OutFile" -Quiet:$Quiet
+                return
+            }
 
-            Write-Log "Download succeeded via Invoke-WebRequest fallback." -Quiet:$Quiet
-            return
+            throw "Invoke-WebRequest completed but output file was not created."
         }
         catch {
-            Write-Log ("Invoke-WebRequest fallback failed: {0}" -f $_.Exception.Message) -Level WARN -Quiet:$Quiet
-            if (Test-Path -LiteralPath $OutFile) {
-                Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
-            }
-        }
-        finally {
-            $ProgressPreference = $savedProgress
+            $iwrError = $_.Exception.Message
+
+            Write-Log (
+                "Invoke-WebRequest failed: {0}" -f $iwrError
+            ) -Level WARN -Quiet:$Quiet
         }
 
+        # ------------------------------------------------------------
+        # Fallback: curl.exe
+        # ------------------------------------------------------------
+        try {
+            Write-Log "Falling back to curl.exe..." -Level WARN -Quiet:$Quiet
+
+            $allArgs = @(
+                '-L',
+                '--fail',
+                '--silent',
+                '--show-error'
+            ) + $ExtraCurlArgs + @(
+                '-o',
+                $OutFile,
+                $Url
+            )
+
+            & curl.exe @allArgs 2>$null
+            $exitCode = $LASTEXITCODE
+
+            if ($exitCode -eq 0 -and (Test-Path -LiteralPath $OutFile)) {
+                Write-Log "Download successful using curl.exe: $OutFile" -Quiet:$Quiet
+                return
+            }
+
+            throw "curl.exe failed with exit code $exitCode."
+        }
+        catch {
+            $curlError = $_.Exception.Message
+
+            Write-Log (
+                "curl.exe failed: {0}" -f $curlError
+            ) -Level WARN -Quiet:$Quiet
+        }
+
+        # ------------------------------------------------------------
+        # Both methods failed
+        # ------------------------------------------------------------
         if ($attempt -lt $maxAttempts) {
-            Write-Log ("Download attempt {0} failed via both curl.exe and Invoke-WebRequest. Will retry." -f $attempt) -Level WARN -Quiet:$Quiet
+            Write-Log (
+                "Download attempt {0} failed using both Invoke-WebRequest and curl.exe. Will retry." -f
+                $attempt
+            ) -Level WARN -Quiet:$Quiet
         }
     }
 
-    $msg = "Download failed after $maxAttempts attempt(s) via both curl.exe and Invoke-WebRequest: $Url"
+    $msg = "Download failed after $maxAttempts attempt(s) using both Invoke-WebRequest and curl.exe: $Url"
+
     Write-Log $msg -Level ERROR -Quiet:$Quiet
+
     throw $msg
 }
 
@@ -146,44 +369,6 @@ function Invoke-DownloadWithRetry {
 # ---------------------------------------------------------------------------
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-function Get-NetworkContentPath {
-    <#
-    .SYNOPSIS
-        Creates and returns the network content folder for one application
-        version in the configured share layout.
-
-    .DESCRIPTION
-        Nested (default): <FileServerPath>\Applications\<Vendor>\<App>\<Version>
-        Flat:             <FileServerPath>\Applications\<Vendor>-<App>-<Version>
-
-        Both layouts live under Applications\. Nested keeps an app's version
-        folders adjacent (retention pruning deletes old version folders in
-        place); Flat serves org conventions that mandate one folder per
-        package. The layout choice must stay consistent across a site: mixing
-        them leaves content split across two trees.
-    #>
-    param(
-        [Parameter(Mandatory)][string]$FileServerPath,
-        [Parameter(Mandatory)][string]$VendorFolder,
-        [Parameter(Mandatory)][string]$AppFolder,
-        [Parameter(Mandatory)][string]$Version,
-        [ValidateSet('Nested', 'Flat')][string]$Layout = 'Nested'
-    )
-
-    if ($Layout -eq 'Flat') {
-        $appsRoot    = Join-Path $FileServerPath 'Applications'
-        $contentPath = Join-Path $appsRoot ('{0}-{1}-{2}' -f $VendorFolder, $AppFolder, $Version)
-        Initialize-Folder -Path $appsRoot
-        Initialize-Folder -Path $contentPath
-        return $contentPath
-    }
-
-    $appRoot     = Get-NetworkAppRoot -FileServerPath $FileServerPath -VendorFolder $VendorFolder -AppFolder $AppFolder
-    $contentPath = Join-Path $appRoot $Version
-    Initialize-Folder -Path $contentPath
-    return $contentPath
-}
 
 # ---------------------------------------------------------------------------
 # Environment & pre-flight checks
@@ -215,6 +400,32 @@ function Get-AppPackagerRootPreferences {
     }
 }
 
+function Resolve-ConfigurationManagerModulePath {
+    $candidates = @()
+
+    if ($env:SMS_ADMIN_UI_PATH) {
+        $candidates += (Join-Path $env:SMS_ADMIN_UI_PATH '..\ConfigurationManager.psd1')
+        $candidates += (Join-Path (Split-Path -Parent $env:SMS_ADMIN_UI_PATH) 'ConfigurationManager.psd1')
+    }
+
+    $prefs = Get-AppPackagerRootPreferences
+    if ($prefs -and $prefs.DetectedTools -and $prefs.DetectedTools.ConfigMgrConsole -and $prefs.DetectedTools.ConfigMgrConsole.ModulePath) {
+        $candidates += [string]$prefs.DetectedTools.ConfigMgrConsole.ModulePath
+    }
+
+    $candidates += @(
+        'C:\Program Files (x86)\Microsoft Configuration Manager\AdminConsole\bin\ConfigurationManager.psd1',
+        'C:\Program Files\Microsoft Configuration Manager\AdminConsole\bin\ConfigurationManager.psd1',
+        'C:\Program Files (x86)\Microsoft Endpoint Manager\AdminConsole\bin\ConfigurationManager.psd1',
+        'C:\Program Files\Microsoft Endpoint Manager\AdminConsole\bin\ConfigurationManager.psd1'
+    )
+
+    foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+
+    return $null
+}
 
 function Resolve-CMProviderMachineName {
     param([string]$ProviderMachineName)
@@ -248,23 +459,126 @@ function Resolve-CMProviderMachineName {
     return $null
 }
 
+function Test-CMSiteCodeMatchesProvider {
+    <#
+    .SYNOPSIS
+        Asks the SMS Provider which site code(s) it actually serves.
+
+    .DESCRIPTION
+        Queries root\sms:SMS_ProviderLocation on the provider machine. A
+        CMSite PSDrive whose NAME does not match a real site code on its Root
+        server is the classic cause of CM cmdlets failing with
+        "Key cannot be null. Parameter name: key". Returns $null when the
+        query itself fails (offline provider, no WMI rights).
+    #>
+    param(
+        [Parameter(Mandatory)][string]$SiteCode,
+        [Parameter(Mandatory)][string]$ProviderMachineName
+    )
+
+    try {
+        $locations = @(Get-WmiObject -ComputerName $ProviderMachineName -Namespace 'root\sms' -Class 'SMS_ProviderLocation' -ErrorAction Stop)
+        $codes = @($locations | ForEach-Object { [string]$_.SiteCode } | Where-Object { $_ } | Select-Object -Unique)
+        if ($codes.Count -eq 0) { return $null }
+
+        return [pscustomobject]@{
+            Match     = ($codes -contains $SiteCode)
+            SiteCodes = $codes
+        }
+    }
+    catch {
+        Write-Log ("Provider site-code query failed for {0}: {1}" -f $ProviderMachineName, $_.Exception.Message) -Level DEBUG
+        return $null
+    }
+}
 
 function Connect-CMSite {
     param(
         [Parameter(Mandatory)][string]$SiteCode,
         [string]$ProviderMachineName = $null
     )
-    # Resolution stays app-side: preferences, the AdminUI connect script,
-    # and APP_PACKAGER_CM_PROVIDER feed Resolve-CMProviderMachineName; the
-    # drive and session mechanics live in SuiteCommon. Site verification
-    # stays off: packager runs never queried the site on connect.
-    $provider = Resolve-CMProviderMachineName -ProviderMachineName $ProviderMachineName
-    if ([string]::IsNullOrWhiteSpace($provider) -and
-        -not (Get-PSDrive -Name $SiteCode -PSProvider CMSite -ErrorAction SilentlyContinue)) {
-        Write-Log "Configuration Manager PSDrive '$SiteCode' is not available and no provider machine name is configured. Set Provider Machine in MECM Preferences, copy the ProviderMachineName value from the AdminUI connect script, or set APP_PACKAGER_CM_PROVIDER." -Level ERROR
+
+    try {
+        if (-not (Get-Module -Name ConfigurationManager -ErrorAction SilentlyContinue)) {
+            $cmModulePath = Resolve-ConfigurationManagerModulePath
+            $moduleSource = if ($cmModulePath) { $cmModulePath } else { 'PSModulePath lookup' }
+            Write-Log ("ConfigurationManager module  : importing from {0}" -f $moduleSource) -Level DEBUG
+            if ($cmModulePath -and (Test-Path -LiteralPath $cmModulePath)) {
+                Import-Module $cmModulePath -ErrorAction Stop
+            }
+            else {
+                Import-Module ConfigurationManager -ErrorAction Stop
+            }
+        }
+        else {
+            Write-Log "ConfigurationManager module  : already loaded" -Level DEBUG
+        }
+
+        $cmDrives = @(Get-PSDrive -PSProvider CMSite -ErrorAction SilentlyContinue)
+        $driveList = if ($cmDrives.Count -gt 0) {
+            ($cmDrives | ForEach-Object { "{0} -> {1}" -f $_.Name, $_.Root }) -join '; '
+        } else { '(none)' }
+        Write-Log ("CMSite drives in session     : {0}" -f $driveList) -Level DEBUG
+
+        $siteDrive = Get-PSDrive -Name $SiteCode -PSProvider CMSite -ErrorAction SilentlyContinue
+        $staleRoot = $null
+        $connected = $false
+
+        if ($siteDrive) {
+            try {
+                Set-Location "$($SiteCode):\" -ErrorAction Stop
+                $connected = $true
+            }
+            catch {
+                # Entering an existing drive can fail when its provider
+                # connection is gone (e.g. provider restart). Tear it down
+                # and rebuild from the provider instead of giving up.
+                Write-Log ("Set-Location {0}: failed on existing drive ({1}); recreating it." -f $SiteCode, $_.Exception.Message)
+                $staleRoot = [string]$siteDrive.Root
+                Remove-PSDrive -Name $SiteCode -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        if (-not $connected) {
+            $provider = Resolve-CMProviderMachineName -ProviderMachineName $ProviderMachineName
+            if ([string]::IsNullOrWhiteSpace($provider)) { $provider = $staleRoot }
+            if ([string]::IsNullOrWhiteSpace($provider)) {
+                throw "Configuration Manager PSDrive '$SiteCode' is not available and no provider machine name is configured. Set Provider Machine in MECM Preferences, copy the ProviderMachineName value from the AdminUI connect script, or set APP_PACKAGER_CM_PROVIDER."
+            }
+
+            Write-Log "Connecting to CM provider     : $provider"
+            New-PSDrive -Name $SiteCode -PSProvider CMSite -Root $provider -ErrorAction Stop | Out-Null
+            Set-Location "$($SiteCode):\" -ErrorAction Stop
+        }
+
+        Write-Log "Connected to CM site: $SiteCode"
+
+        # Verbose-only sanity check: a drive named for the wrong site code
+        # connects fine but every subsequent CM cmdlet dies with
+        # "Key cannot be null. Parameter name: key". Surface that here so the
+        # log explains the failure instead of the cmdlet's opaque message.
+        if ($script:__AppPackagerVerbose) {
+            $drive = Get-PSDrive -Name $SiteCode -PSProvider CMSite -ErrorAction SilentlyContinue
+            if ($drive -and -not [string]::IsNullOrWhiteSpace([string]$drive.Root)) {
+                $check = Test-CMSiteCodeMatchesProvider -SiteCode $SiteCode -ProviderMachineName ([string]$drive.Root)
+                if ($check) {
+                    if ($check.Match) {
+                        Write-Log ("Provider confirms site code  : {0} on {1}" -f $SiteCode, $drive.Root) -Level DEBUG
+                    }
+                    else {
+                        Write-Log ("Site code mismatch: drive is named '{0}' but provider {1} serves site code(s) {2}. CM cmdlets typically fail with 'Key cannot be null. Parameter name: key' in this state - correct the SiteCode in MECM Preferences / -SiteCode." -f $SiteCode, $drive.Root, ($check.SiteCodes -join ', ')) -Level WARN
+                    }
+                }
+            }
+        }
+
+        return $true
+    }
+    catch {
+        Write-LogErrorRecord -ErrorRecord $_ -Context ("Connect-CMSite SiteCode={0}" -f $SiteCode) -Level DEBUG
+        Write-Log "Failed to connect to CM site: $($_.Exception.Message)" -Level ERROR
         return $false
     }
-    return (SuiteCommon\Connect-CMSite -SiteCode $SiteCode -SMSProvider $provider -SkipSiteVerification)
 }
 
 function Initialize-Folder {
@@ -697,6 +1011,35 @@ function Read-StageManifest {
     return $manifest
 }
 
+function Update-StageManifest {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+        [Parameter(Mandatory)]
+        [string]$Destination,
+        [Parameter(Mandatory)]
+        [string]$RelativePath
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Stage manifest not found: $Path"
+    }
+
+    # Read existing manifest
+    $manifest = Get-Content -LiteralPath $Path -Raw |
+        ConvertFrom-Json
+
+    # Update RelativePath for every FileHashes entry
+    foreach ($fileHash in $manifest.FileHashes) {
+        $fileHash.RelativePath = Join-Path $RelativePath $fileHash.RelativePath
+    }
+
+    # Write manifest back to disk
+    $manifest |
+        ConvertTo-Json -Depth 10 |
+        Set-Content -Path $Destination -Encoding UTF8
+}
+
 # ---------------------------------------------------------------------------
 # MECM helpers (continued)
 # ---------------------------------------------------------------------------
@@ -734,24 +1077,119 @@ function Get-NetworkAppRoot {
         Creates and returns the network content root for an application.
 
     .DESCRIPTION
-        Builds the path <FileServerPath>\Applications\<VendorFolder>\<AppFolder>,
+        Builds the path based on the Application Share Pattern parameter,
         creating each level if it does not exist. Returns the final path.
+    #>
+        param(
+        [Parameter(Mandatory)]
+        [string]$FileServerPath,
+
+        [Parameter(Mandatory)]
+        [string]$PathPattern,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Variables
+    )
+
+    $relativePath = $PathPattern
+
+    foreach ($key in $Variables.Keys) {
+        $value = $Variables[$key]
+
+        if ([string]::IsNullOrWhiteSpace([string]$value)) {
+            $relativePath = $relativePath -replace "_?\{$key\}?", ""
+        }
+        else {
+            $relativePath = $relativePath.Replace("{$key}", ([string]$value -replace " ", "-"))
+        }
+    }
+
+    Initialize-Folder -Path (Join-Path $FileServerPath $relativePath)
+
+    return Join-Path $FileServerPath $relativePath
+}
+
+function Publish-StagedContentToNetwork {
+    <#
+    .SYNOPSIS
+        Publishes staged package content to the network share.
+
+    .DESCRIPTION
+        Resolves the target app root from the path pattern, optionally layers
+        PSADT content, optionally rewrites stage-manifest.json paths for the
+        PSADT Files subfolder, and copies staged files to the destination.
+
+        Returns NetworkAppRoot, NetworkContentPath, and (possibly updated)
+        Manifest so callers can continue with MECM creation.
     #>
     param(
         [Parameter(Mandatory)][string]$FileServerPath,
-        [Parameter(Mandatory)][string]$VendorFolder,
-        [Parameter(Mandatory)][string]$AppFolder
+        [Parameter(Mandatory)][string]$PathPattern,
+        [Parameter(Mandatory)][pscustomobject]$Manifest,
+        [Parameter(Mandatory)][string]$LocalContentPath,
+        [Parameter(Mandatory)][string]$ManifestPath,
+        [string]$PSAppDeployToolkitPath = '',
+        [switch]$SkipStageManifestCopy
     )
 
-    $appsRoot   = Join-Path $FileServerPath "Applications"
-    $vendorPath = Join-Path $appsRoot $VendorFolder
-    $appPath    = Join-Path $vendorPath $AppFolder
+    $networkAppRoot = Get-NetworkAppRoot -FileServerPath $FileServerPath -PathPattern $PathPattern -Variables @{
+        Manufacturer = $Manifest.Publisher
+        ProductName  = $Manifest.AppName
+        Version      = $Manifest.SoftwareVersion
+        Language     = $Manifest.Language
+        Architecture = $Manifest.Architecture
+    }
+    $networkContentPath = $networkAppRoot
+    $effectiveManifest = $Manifest
 
-    Initialize-Folder -Path $appsRoot
-    Initialize-Folder -Path $vendorPath
-    Initialize-Folder -Path $appPath
+    Write-Log "Network content path         : $networkContentPath"
+    Write-Log ""
 
-    return $appPath
+    $usePsadt = ([string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $false -and (Test-Path -LiteralPath $PSAppDeployToolkitPath))
+    if ($usePsadt) {
+        Write-Log "Copying PSADT to network share: $($networkAppRoot)"
+        Copy-Item -Path "$PSAppDeployToolkitPath\*" -Destination $networkAppRoot -Recurse -Force
+
+        if ((Test-Path -LiteralPath (Join-Path $networkAppRoot "Files")) -eq $false) {
+            Initialize-Folder -Path (Join-Path $networkAppRoot "Files")
+        }
+
+        $networkContentPath = Join-Path $networkAppRoot "Files"
+
+        # Update RelativePath values in stage-manifest.json when payload files
+        # live under the PSADT Files subfolder.
+        $networkManifestPath = Join-Path $networkAppRoot "stage-manifest.json"
+        Update-StageManifest -Path $ManifestPath -Destination $networkManifestPath -RelativePath "Files"
+        $effectiveManifest = Read-StageManifest -Path $networkManifestPath
+    }
+
+    # Copy staged content to the final package content path.
+    $localFiles = $null
+    if ($usePsadt) {
+        $localFiles = Get-ChildItem -Path $LocalContentPath -Exclude "stage-manifest.json"
+    }
+    else {
+        $localFiles = Get-ChildItem -Path $LocalContentPath -File -ErrorAction Stop
+    }
+
+    foreach ($f in $localFiles) {
+        if ($SkipStageManifestCopy -and $f.Name -eq "stage-manifest.json") { continue }
+
+        $dest = Join-Path $networkContentPath $f.Name
+        if (-not (Test-Path -LiteralPath $dest)) {
+            Copy-Item -LiteralPath $f.FullName -Destination $dest -Force -ErrorAction Stop
+            Write-Log "Copied to network            : $($f.Name)"
+        }
+        else {
+            Write-Log "Already on network           : $($f.Name)"
+        }
+    }
+
+    return [pscustomobject]@{
+        NetworkAppRoot     = $networkAppRoot
+        NetworkContentPath = $networkContentPath
+        Manifest           = $effectiveManifest
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -1114,107 +1552,6 @@ function New-SingleDetectionClause {
     }
 }
 
-function Test-PsadtLayout {
-    <#
-    .SYNOPSIS
-        Detects the PSADT toolkit generation in a folder and returns the MECM
-        deployment type command lines for it.
-
-    .DESCRIPTION
-        v4 layouts carry Invoke-AppDeployToolkit.ps1 at the root (usually with
-        Invoke-AppDeployToolkit.exe beside it); v3 layouts carry
-        Deploy-Application.exe / Deploy-Application.ps1. The native .exe
-        launcher is preferred when present because it hides the PowerShell
-        window; otherwise the command line falls back to powershell.exe -File.
-
-        DeployMode is deliberately omitted from the generated command lines by
-        default: PSADT runs Interactive when a user session exists and degrades
-        to NonInteractive otherwise, which is the close-app/defer behavior that
-        justifies wrapping with PSADT at all. Pass -DeployMode to force one.
-
-    .OUTPUTS
-        [pscustomobject] Generation ('v3'|'v4'), EntryPoint (file name),
-        InstallCommandLine, UninstallCommandLine.
-    #>
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [ValidateSet('', 'Interactive', 'Silent', 'NonInteractive')]
-        [string]$DeployMode = ''
-    )
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        throw "PSADT toolkit folder not found: $Path"
-    }
-
-    $modeSuffix = if ([string]::IsNullOrWhiteSpace($DeployMode)) { '' } else { " -DeployMode $DeployMode" }
-
-    $v4Exe = Join-Path $Path 'Invoke-AppDeployToolkit.exe'
-    $v4Ps1 = Join-Path $Path 'Invoke-AppDeployToolkit.ps1'
-    $v3Exe = Join-Path $Path 'Deploy-Application.exe'
-    $v3Ps1 = Join-Path $Path 'Deploy-Application.ps1'
-
-    if (Test-Path -LiteralPath $v4Ps1) {
-        if (Test-Path -LiteralPath $v4Exe) {
-            $entry = 'Invoke-AppDeployToolkit.exe'
-            $prefix = $entry
-        }
-        else {
-            $entry = 'Invoke-AppDeployToolkit.ps1'
-            $prefix = "powershell.exe -NonInteractive -ExecutionPolicy Bypass -File `"$entry`""
-        }
-        return [pscustomobject]@{
-            Generation           = 'v4'
-            EntryPoint           = $entry
-            InstallCommandLine   = "$prefix -DeploymentType Install$modeSuffix"
-            UninstallCommandLine = "$prefix -DeploymentType Uninstall$modeSuffix"
-        }
-    }
-
-    if ((Test-Path -LiteralPath $v3Exe) -or (Test-Path -LiteralPath $v3Ps1)) {
-        if (Test-Path -LiteralPath $v3Exe) {
-            $entry = 'Deploy-Application.exe'
-            $prefix = $entry
-        }
-        else {
-            $entry = 'Deploy-Application.ps1'
-            $prefix = "powershell.exe -NonInteractive -ExecutionPolicy Bypass -File `"$entry`""
-        }
-        return [pscustomobject]@{
-            Generation           = 'v3'
-            EntryPoint           = $entry
-            InstallCommandLine   = "$prefix -DeploymentType `"Install`"$modeSuffix"
-            UninstallCommandLine = "$prefix -DeploymentType `"Uninstall`"$modeSuffix"
-        }
-    }
-
-    throw "No PSADT entry point found in '$Path' (expected Invoke-AppDeployToolkit.ps1 [v4] or Deploy-Application.exe/.ps1 [v3])."
-}
-
-function Get-NextPatchVersion {
-    <#
-    .SYNOPSIS
-        Returns the version string with its last dotted numeric component
-        incremented by one ('8.0.20' -> '8.0.21').
-    .DESCRIPTION
-        Used by packagers whose detection accepts the packaged version OR its
-        immediate successor, so last month's still-active deployment stops
-        reinstalling over an in-place upgrade. Returns $null when the last
-        component is not purely numeric (e.g. preview/rc suffixes), so callers
-        can fall back to single-version detection.
-    #>
-    param([Parameter(Mandatory)][string]$Version)
-
-    # Every dotted component must be purely numeric; '10.0.0-rc.1' splits to a
-    # numeric final segment and must not be treated as an incrementable patch.
-    $parts = $Version -split '\.'
-    $n = 0
-    foreach ($p in $parts) {
-        if (-not [int]::TryParse($p, [ref]$n)) { return $null }
-    }
-    $parts[$parts.Count - 1] = [string]([int]$parts[$parts.Count - 1] + 1)
-    return ($parts -join '.')
-}
-
 function Test-MECMApplicationHasDeploymentType {
     param(
         [Parameter(Mandatory)][string]$ApplicationName,
@@ -1279,16 +1616,24 @@ function New-MECMApplicationFromManifest {
     #>
     param(
         [Parameter(Mandatory)][pscustomobject]$Manifest,
+        [Parameter(Mandatory)][string]$AppNamePattern,
         [Parameter(Mandatory)][string]$SiteCode,
+        [string]$MCMAppFolder = $null,
         [AllowEmptyString()][string]$Comment = '',
         [Parameter(Mandatory)][string]$NetworkContentPath,
+        [string]$PSAppDeployToolkitPath = $null,
         [int]$EstimatedRuntimeMins = 15,
         [int]$MaximumRuntimeMins = 30
     )
 
     $orig = Get-Location
 
-    $contentVerification = Compare-StageFileHashes -Root $NetworkContentPath -Expected $Manifest.FileHashes
+    if($PSAppDeployToolkitPath -and [string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $false) {
+        $contentVerification = Compare-StageFileHashes -Root $NetworkContentPath -Expected $Manifest.FileHashes -AllowExtra
+    } else {
+        $contentVerification = Compare-StageFileHashes -Root $NetworkContentPath -Expected $Manifest.FileHashes
+    }
+    
     if ($contentVerification.Skipped) {
         Write-Log ("Package integrity verification : skipped ({0})" -f $contentVerification.Reason) -Level WARN
     }
@@ -1297,6 +1642,19 @@ function New-MECMApplicationFromManifest {
     }
     else {
         Write-Log ("Package integrity verified     : {0} file(s)" -f $contentVerification.ExpectedCount)
+    }
+
+    $iconFile = $null
+    if([string]::IsNullOrWhiteSpace($Manifest.IconFileName) -eq $false){
+        if($PSAppDeployToolkitPath -and [string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $false) {
+            if(Test-Path -LiteralPath ([IO.Path]::Combine($NetworkContentPath, "Files", $Manifest.IconFileName))) {
+                $iconFile = ([IO.Path]::Combine($NetworkContentPath, "Files", $Manifest.IconFileName))
+            }
+        } else {
+            if(Test-Path -LiteralPath (Join-Path $NetworkContentPath $Manifest.IconFileName)) {
+                $iconFile = (Join-Path $NetworkContentPath $Manifest.IconFileName)
+            }
+        }
     }
 
     # Tracks the operation in flight so the catch block can name the step
@@ -1311,99 +1669,76 @@ function New-MECMApplicationFromManifest {
         }
 
         $appName = $Manifest.AppName
-        if ([string]::IsNullOrWhiteSpace([string]$appName)) {
+        $cmAppName = $AppNamePattern
+
+        $variables = @{ Publisher = $Manifest.Publisher; AppName = $Manifest.AppName; SoftwareVersion = $Manifest.SoftwareVersion; Language = $Manifest.Language; Architecture = $Manifest.Architecture }
+
+        foreach ($key in $Variables.Keys) {
+            $value = $Variables[$key]
+
+            if ([string]::IsNullOrWhiteSpace([string]$value)) {
+                $cmAppName = $cmAppName -replace "_?\{$key\}_?", ""
+            } else {
+                $cmAppName = $cmAppName.Replace("{$key}", ([string]$value -replace " ", "-"))
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace([string]$cmAppName)) {
             throw "Stage manifest AppName is null or empty; cannot create an MECM application. Re-run the Stage phase and verify the manifest."
         }
 
         Write-Log ("Manifest fields              : AppName='{0}' Publisher='{1}' SoftwareVersion='{2}' DetectionType='{3}'" -f $appName, $Manifest.Publisher, $Manifest.SoftwareVersion, $Manifest.Detection.Type) -Level DEBUG
 
-        $step = "Get-CMApplication duplicate check ('$appName')"
-        $existing = Get-CMApplication -Name $appName -ErrorAction SilentlyContinue
-        $cmApp = $null
-        $replaceDtName = $null
+        $step = "Get-CMApplication duplicate check ('$cmAppName')"
+        $existing = Get-CMApplication -Name $cmAppName -ErrorAction SilentlyContinue
         if ($existing) {
             $existingApps = @($existing)
             if ($existingApps.Count -gt 1) {
-                throw "Multiple existing MECM applications matched '$appName'; refusing to package until the duplicate names are resolved."
-            }
-            $cmApp = $existingApps[0]
-
-            $dtName = $appName
-            $hasDt = Test-MECMApplicationHasDeploymentType -ApplicationName $appName -DeploymentTypeName $dtName
-            $existingVersion = [string]$cmApp.SoftwareVersion
-
-            if ($existingVersion -eq [string]$Manifest.SoftwareVersion) {
-                if ($hasDt) {
-                    Write-Log "Application already exists    : $appName (v$existingVersion, unchanged)" -Level WARN
-                    Write-Log "Deployment type validated     : $dtName"
-                    return [UInt32]$cmApp.CI_ID
-                }
-                throw "Existing MECM application '$appName' is missing deployment type '$dtName'. This looks like a partial prior package run; fix or remove the partial app before packaging again."
+                throw "Multiple existing MECM applications matched '$cmAppName'; refusing to package until the duplicate names are resolved."
             }
 
-            # Version change on a reused application name (version-less CMName by
-            # design): replace the deployment type with one pointing at the new
-            # content. The new deployment type is created under a staging name
-            # first, because a deployed application refuses to remove its last
-            # deployment type.
-            Write-Log "Application already exists    : $appName (v$existingVersion -> v$($Manifest.SoftwareVersion), replacing deployment type)" -Level WARN
-            if ($hasDt) {
-                $replaceDtName = $dtName
+            $dtName = $cmAppName
+            if (Test-MECMApplicationHasDeploymentType -ApplicationName $cmAppName -DeploymentTypeName $dtName) {
+                Write-Log "Application already exists    : $cmAppName" -Level WARN
+                Write-Log "Deployment type validated     : $dtName"
+                return [UInt32]$existingApps[0].CI_ID
             }
-            else {
-                Write-Log "Existing app has no deployment type; adding one for the new version." -Level WARN
-            }
+
+            throw "Existing MECM application '$cmAppName' is missing deployment type '$dtName'. This looks like a partial prior package run; fix or remove the partial app before packaging again."
         }
 
-        if (-not $cmApp) {
-            Write-Log "Creating CM Application      : $appName"
-            $step = "New-CMApplication ('$appName')"
-            $cmAppParams = @{
-                Name             = $appName
-                Publisher        = $Manifest.Publisher
-                SoftwareVersion  = $Manifest.SoftwareVersion
-                Description      = $Comment
-                AutoInstall      = $true
-                ErrorAction      = 'Stop'
-            }
-            # Set Software Center display name if provided (omits channel/arch details)
-            if ($Manifest.DisplayName) {
-                $cmAppParams['LocalizedApplicationName'] = $Manifest.DisplayName
-                Write-Log "Software Center name         : $($Manifest.DisplayName)"
-            }
-            $cmApp = New-CMApplication @cmAppParams
-
-            Write-Log "Application CI_ID            : $($cmApp.CI_ID)"
+        Write-Log "Creating CM Application      : $cmAppName"
+        $step = "New-CMApplication ('$cmAppName')"
+        $cmAppParams = @{
+            Name             = $cmAppName
+            Publisher        = $Manifest.Publisher
+            SoftwareVersion  = $Manifest.SoftwareVersion
+            Description      = $Comment
+            AutoInstall      = $true
+            ErrorAction      = 'Stop'
         }
+        # Set Software Center display name if provided (omits channel/arch details)
+        if ($Manifest.DisplayName) {
+            $cmAppParams['LocalizedApplicationName'] = $Manifest.DisplayName
+            Write-Log "Software Center name         : $($Manifest.DisplayName)"
+        }
+        if([string]::IsNullOrWhiteSpace($iconFile) -eq $false){
+            Write-Log "Setting Icon file: $iconFile"
+            $cmAppParams['IconLocationFile'] = $iconFile
+        }
+        $cmApp = New-CMApplication @cmAppParams
+
+        Write-Log "Application CI_ID            : $($cmApp.CI_ID)"
 
         # Determine detection type (backward compat: missing Type = RegistryKeyValue)
         $detType = if ($Manifest.Detection.Type) { $Manifest.Detection.Type } else { 'RegistryKeyValue' }
 
-        # Common deployment type parameters (splatted). On a version replace the
-        # new deployment type starts under a staging name; it is renamed to the
-        # canonical name after the old one is removed.
-        $dtName = $appName
-        $dtCreateName = if ($replaceDtName) { "$dtName (staging)" } else { $dtName }
-        # Deployment type command lines default to the generated .bat wrappers;
-        # manifests may override both (PSADT-wrapped apps point at the toolkit
-        # entry, e.g. Invoke-AppDeployToolkit.exe -DeploymentType Install).
-        $installCommand = 'install.bat'
-        $uninstallCommand = 'uninstall.bat'
-        if (-not [string]::IsNullOrWhiteSpace([string]$Manifest.InstallCommandLine)) {
-            $installCommand = [string]$Manifest.InstallCommandLine
-            Write-Log "Install command (manifest)   : $installCommand"
-        }
-        if (-not [string]::IsNullOrWhiteSpace([string]$Manifest.UninstallCommandLine)) {
-            $uninstallCommand = [string]$Manifest.UninstallCommandLine
-            Write-Log "Uninstall command (manifest) : $uninstallCommand"
-        }
-
+        # Common deployment type parameters (splatted)
+        $dtName = $cmAppName
         $dtParams = @{
-            ApplicationName           = $appName
-            DeploymentTypeName        = $dtCreateName
+            ApplicationName           = $cmAppName
+            DeploymentTypeName        = $cmAppName + " - Install"
             ContentLocation           = $NetworkContentPath
-            InstallCommand            = $installCommand
-            UninstallCommand          = $uninstallCommand
             InstallationBehaviorType  = 'InstallForSystem'
             LogonRequirementType      = 'WhetherOrNotUserLoggedOn'
             EstimatedRuntimeMins      = $EstimatedRuntimeMins
@@ -1412,6 +1747,14 @@ function New-MECMApplicationFromManifest {
             SlowNetworkDeploymentMode = 'Download'
             UserInteractionMode       = 'Hidden'
             ErrorAction               = 'Stop'
+        }
+
+        if($PSAppDeployToolkitPath -and [string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $false) {
+            $dtParams['InstallCommand']     = 'Deploy-Application.EXE INSTALL'
+            $dtParams['UninstallCommand']   = 'Deploy-Application.EXE UNINSTALL'
+        } else {
+            $dtParams['InstallCommand']     = 'install.bat'
+            $dtParams['UninstallCommand']   = 'uninstall.bat'
         }
 
         # Manifest field name matches the cmdlet's parameter TYPE
@@ -1457,33 +1800,9 @@ function New-MECMApplicationFromManifest {
                 }
                 $dtParams['AddDetectionClause'] = $clauses
 
-                $groupSizes = @()
-                if ($Manifest.Detection.PSObject.Properties.Name -contains 'GroupSizes' -and $null -ne $Manifest.Detection.GroupSizes) {
-                    $groupSizes = @($Manifest.Detection.GroupSizes | ForEach-Object { [int]$_ })
-                }
-
-                if ($groupSizes.Count -gt 0) {
-                    # (run1 AND ...) OR (run2 AND ...): exactly two contiguous
-                    # clause runs. Only the second run is passed to
-                    # -GroupDetectionClauses; the cmdlet's left-associative
-                    # expression build parenthesizes the first run on its own,
-                    # so grouping both runs is impossible (String[] holds one
-                    # group) and unnecessary. OR attaches to the first clause
-                    # of the second run; clauses inside a run keep AND.
-                    if ($groupSizes.Count -ne 2 -or (($groupSizes[0] + $groupSizes[1]) -ne $clauses.Count) -or ($groupSizes -contains 0)) {
-                        throw "Detection.GroupSizes must be exactly two non-zero sizes summing to the clause count (got: '$($groupSizes -join ',')' for $($clauses.Count) clauses)."
-                    }
-                    $secondStart = $groupSizes[0]
-                    $dtParams['GroupDetectionClauses'] = @($clauses[$secondStart..($clauses.Count - 1)] | ForEach-Object { $_.Setting.LogicalName })
-                    $dtParams['DetectionClauseConnector'] = @(@{
-                        LogicalName = $clauses[$secondStart].Setting.LogicalName
-                        Connector   = 'OR'
-                    })
-                    Write-Log ("Detection expression         : (clauses 1..{0}) OR (clauses {1}..{2})" -f $groupSizes[0], ($secondStart + 1), $clauses.Count)
-                }
                 # OR connector: specify OR for each clause beyond the first
                 # AND is the default and needs no explicit connector
-                elseif ($Manifest.Detection.Connector -eq 'Or' -and $clauses.Count -ge 2) {
+                if ($Manifest.Detection.Connector -eq 'Or' -and $clauses.Count -ge 2) {
                     $connectors = @()
                     for ($i = 1; $i -lt $clauses.Count; $i++) {
                         $connectors += @{
@@ -1509,39 +1828,26 @@ function New-MECMApplicationFromManifest {
 
         Write-Log ("Deployment type parameters   : {0}" -f (($dtParams.Keys | Sort-Object | ForEach-Object { "{0}='{1}'" -f $_, $dtParams[$_] }) -join ' ')) -Level DEBUG
 
-        Write-Log "Adding Script Deployment Type : $dtCreateName"
-        $step = "Add-CMScriptDeploymentType ('$dtCreateName')"
+        Write-Log "Adding Script Deployment Type : $dtName"
+        $step = "Add-CMScriptDeploymentType ('$dtName')"
         Add-CMScriptDeploymentType @dtParams | Out-Null
-
-        if ($replaceDtName) {
-            $step = "Remove-CMDeploymentType ('$replaceDtName')"
-            Remove-CMDeploymentType -ApplicationName $appName -DeploymentTypeName $replaceDtName -Force -ErrorAction Stop
-            Write-Log "Removed old deployment type  : $replaceDtName"
-
-            $step = "Set-CMDeploymentType rename ('$dtCreateName' -> '$dtName')"
-            Set-CMDeploymentType -ApplicationName $appName -DeploymentTypeName $dtCreateName -NewDeploymentTypeName $dtName -ErrorAction Stop
-            Write-Log "Renamed deployment type      : $dtName"
-        }
-
-        if ($existing) {
-            $step = "Set-CMApplication version update ('$appName')"
-            $setAppParams = @{
-                Name            = $appName
-                SoftwareVersion = [string]$Manifest.SoftwareVersion
-                ErrorAction     = 'Stop'
-            }
-            if (-not [string]::IsNullOrWhiteSpace($Comment)) { $setAppParams['Description'] = $Comment }
-            Set-CMApplication @setAppParams
-            Write-Log "Updated application version  : $($Manifest.SoftwareVersion)"
-        }
 
         $step = "Remove-CMApplicationRevisionHistory (CI_ID=$($cmApp.CI_ID))"
         Remove-CMApplicationRevisionHistoryByCIId -CI_ID ([UInt32]$cmApp.CI_ID) -KeepLatest 1
 
-        # Optional auto-distribute to a DP group, and optional test-collection
-        # deployment after successful distribution. Settings live in
+        # Move application to the correct folder if specified in the manifest
+        if ($MCMAppFolder -and -not [string]::IsNullOrWhiteSpace($MCMAppFolder)) {
+            Write-Log "Moving application to folder   : $MCMAppFolder"
+            $AppObj = Get-CMApplication -Name $cmAppName
+            if($AppObj){
+                $destFolder = $ExecutionContext.SessionState.Path.Combine($($SiteCode+':\Application\'), $MCMAppFolder)
+                Move-CMObject -InputObject $AppObj -FolderPath $destFolder -ErrorAction Stop | Out-Null
+            }
+        }
+
+        # Optional auto-distribute to a DP group. Settings live in
         # AppPackager.preferences.json alongside the GUI. Packagers invoked
-        # from the CLI with no prefs file silently skip both steps.
+        # from the CLI with no prefs file silently skip this step.
         try {
             $prefsPath = Join-Path $PSScriptRoot '..\AppPackager.preferences.json'
             if (Test-Path -LiteralPath $prefsPath) {
@@ -1561,41 +1867,6 @@ function New-MECMApplicationFromManifest {
                                 Write-Log "Content distribution         : already targeted (treated as success)"
                             } else {
                                 Write-Log "Content distribution failed  : $($_.Exception.Message)" -Level WARN
-                            }
-                        }
-
-                        # Availability of the test-deployment option is gated in the
-                        # GUI (requires auto-distribute + DP group); at runtime the
-                        # prefs are taken as-is.
-                        $testCollection = if ($null -ne $cd.TestCollectionName) { ([string]$cd.TestCollectionName).Trim() } else { '' }
-                        if ($cd.DeployToTestCollection -and -not [string]::IsNullOrWhiteSpace($testCollection)) {
-                            try {
-                                $collection = Get-CMDeviceCollection -Name $testCollection -ErrorAction SilentlyContinue
-                                if (-not $collection -and [bool]$cd.CreateTestCollectionIfMissing) {
-                                    Write-Log "Creating test collection     : '$testCollection' (direct membership, limited to All Systems)"
-                                    New-CMDeviceCollection -Name $testCollection -LimitingCollectionName 'All Systems' -ErrorAction Stop | Out-Null
-                                    $collection = Get-CMDeviceCollection -Name $testCollection -ErrorAction SilentlyContinue
-                                }
-                                if (-not $collection) {
-                                    Write-Log "Test deployment skipped      : collection '$testCollection' not found (enable 'Create collection if it does not exist' or create it first)" -Level WARN
-                                }
-                                else {
-                                    Write-Log "Deploying to test collection : '$testCollection' (Available, immediate)"
-                                    New-CMApplicationDeployment `
-                                        -Name $appName `
-                                        -CollectionName $testCollection `
-                                        -DeployAction Install `
-                                        -DeployPurpose Available `
-                                        -AvailableDateTime (Get-Date) `
-                                        -ErrorAction Stop | Out-Null
-                                    Write-Log "Test deployment              : created"
-                                }
-                            } catch {
-                                if ($_.Exception.Message -match 'already (exists|deployed|been deployed)') {
-                                    Write-Log "Test deployment              : already exists (treated as success)"
-                                } else {
-                                    Write-Log "Test deployment failed       : $($_.Exception.Message)" -Level WARN
-                                }
                             }
                         }
                     }
@@ -2167,6 +2438,45 @@ function Update-PackagerHistory {
     }
 
     Save-PackagerHistory -History $history
+}
+
+
+function Get-LanguageCode {
+    <#
+    .SYNOPSIS 
+        Returns the LCID for a given language/locale string.
+    .DESCRIPTION
+        Uses .NET's CultureInfo to resolve a language/locale string (e.g. "en-US") to its corresponding LCID (e.g. 1033). Throws an error if the language/locale is invalid or not recognized.
+    .PARAMETER Language
+        The language/locale string to resolve (e.g. "en-US", "fr-FR").
+    .OUTPUTS
+        [int] The LCID corresponding to the provided language/locale string.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Language
+    )
+
+    try {
+        return [System.Globalization.CultureInfo]::GetCultureInfo($Language).LCID
+    }
+    catch {
+        Write-Error "Invalid language/locale: $Language"
+    }
+}
+
+function Get-LanguageFromCode {
+    param(
+        [Parameter(Mandatory)]
+        [int]$LCID
+    )
+
+    try {
+        return ([System.Globalization.CultureInfo]::GetCultureInfo($LCID)).TwoLetterISOLanguageName.ToUpper()
+    }
+    catch {
+        Write-Error "Invalid LCID: $LCID"
+    }
 }
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-﻿<#
+<#
 Vendor: 7-Zip
 App: 7-Zip
 CMName: 7-Zip
@@ -59,16 +59,19 @@ UpdateCadenceDays: 90
     - PowerShell 5.1
     - ConfigMgr Admin Console installed (ConfigurationManager PowerShell module available)
     - RBAC permissions to create Applications and Deployment Types
+    - Local administrator
     - Write access to FileServerPath
 #>
 
 param(
     [string]$SiteCode = "MCM",
+    [string]$MECMApplicationFolder = "",
     [string]$Comment = "",
     [string]$FileServerPath = "\\fileserver\sccm$",
-    [ValidateSet('Nested','Flat')]
-    [string]$ContentLayout = "Nested",
+    [string]$ApplicationSharePattern = "Applications\{ProductName}\{Version}",
+    [string]$AppNamePattern = "{AppName} - {SoftwareVersion}",
     [string]$DownloadRoot = "C:\temp\ap",
+    [String]$PSAppDeployToolkitPath = "",
     [int]$EstimatedRuntimeMins = 15,
     [int]$MaximumRuntimeMins = 30,
     [string]$LogPath,
@@ -89,11 +92,12 @@ if ($StageOnly -and $PackageOnly) {
 
 # --- Configuration ---
 $DownloadPageUrl = "https://www.7-zip.org/download.html"
+$DownloadIconUrl = "https://www.7-zip.org/7ziplogo.png"
 
-$VendorFolder = "7-Zip"
-$AppFolder    = "7-Zip"
+$Publisher  = "Igor Pavlov"
+$AppName    = "7-Zip"
 
-$BaseDownloadRoot = Join-Path $DownloadRoot "7-Zip"
+$BaseDownloadRoot = Join-Path $DownloadRoot $AppName
 $MsiFileName      = "7zip-x64.msi"
 
 # --- Functions ---
@@ -105,8 +109,11 @@ function Resolve-7ZipX64MsiUrl {
     Write-Log "7-Zip download page          : $DownloadPageUrl" -Quiet:$Quiet
 
     try {
-        $html = (curl.exe -L --fail --silent --show-error $DownloadPageUrl) -join "`n"
-        if ($LASTEXITCODE -ne 0) { throw "Failed to fetch 7-Zip download page: $DownloadPageUrl" }
+
+        $html = Get-PageContentWithFallback -Url $DownloadPageUrl -Quiet:$Quiet
+        if ([string]::IsNullOrWhiteSpace($html)) {
+            throw "Could not retrieve $DownloadPageUrl using either Invoke-WebRequest or curl.exe."
+        }
 
         # Typical links: a/7z2501-x64.msi
         $rx = [regex]'href\s*=\s*"(?<href>[^"]*?7z(?<ver>\d{4})-x64\.msi)"'
@@ -123,7 +130,10 @@ function Resolve-7ZipX64MsiUrl {
             }
         }
 
-        $best = $candidates | Sort-Object VerDigits -Descending | Select-Object -First 1
+        $best = $candidates |
+            Sort-Object VerDigits -Descending |
+            Select-Object -First 1
+
         $base = [uri]"https://www.7-zip.org/"
         $final = ([uri]::new($base, $best.Href)).AbsoluteUri
 
@@ -168,6 +178,10 @@ function Invoke-Stage7Zip {
     Write-Log ("=" * 60)
     Write-Log ""
 
+    if (-not (Test-IsAdmin)) {
+        Write-Log "Run PowerShell as Administrator." -Level WARN
+    }
+
     Initialize-Folder -Path $BaseDownloadRoot
 
     # --- Download ---
@@ -179,6 +193,19 @@ function Invoke-Stage7Zip {
     Write-Log ""
     Write-Log "Downloading MSI..."
     Invoke-DownloadWithRetry -Url $msiUrl -OutFile $localMsi
+
+    Write-Log "Downloading ICO..."
+    try {
+        $localIco = ([IO.Path]::Combine($BaseDownloadRoot, $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl))))
+        Invoke-DownloadWithRetry -Url $DownloadIconUrl -OutFile $localIco
+    }
+    catch {
+        Write-Log "Failed to download ICO: $($_.Exception.Message)" -Level WARN
+        $localIco = ""
+    }
+
+    Write-Log ""
+    Write-Log "PSAppDeployToolkitPath: $PSAppDeployToolkitPath"
 
     # --- Extract MSI properties ---
     $props = Get-MsiPropertyMap -MsiPath $localMsi
@@ -207,11 +234,20 @@ function Invoke-Stage7Zip {
 
     $stagedMsi = Join-Path $localContentPath $MsiFileName
     if (-not (Test-Path -LiteralPath $stagedMsi)) {
+        #Move-Item -LiteralPath $localMsi -Destination $stagedMsi -Force -ErrorAction Stop
         Copy-Item -LiteralPath $localMsi -Destination $stagedMsi -Force -ErrorAction Stop
         Write-Log "Copied MSI to staged folder  : $stagedMsi"
     }
     else {
         Write-Log "Staged MSI exists. Skipping copy."
+    }
+    if(-not (Test-Path -LiteralPath (Join-Path $localContentPath ([System.IO.Path]::GetFileName($DownloadIconUrl))))) {
+        Copy-Item -LiteralPath $localIco -Destination (Join-Path $localContentPath ([System.IO.Path]::GetFileName($DownloadIconUrl))) -Force -ErrorAction Stop
+        Write-Log "Copied ICO to staged folder  : $localContentPath"
+    }
+    else {
+        Write-Log "Staged ICO exists. Skipping copy."
+
     }
 
     # --- Derive ARP detection from MSI properties ---
@@ -234,23 +270,23 @@ function Invoke-Stage7Zip {
     Write-Log "ARP Is64Bit                  : $($arpEntry.Is64Bit)"
     Write-Log ""
 
-    # --- Generate content wrappers ---
-    $wrapperContent = New-MsiWrapperContent -MsiFileName $MsiFileName
-    Write-ContentWrappers -OutputPath $localContentPath `
-        -InstallPs1Content $wrapperContent.Install `
-        -UninstallPs1Content $wrapperContent.Uninstall
+    if([string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $true -or (Test-Path -LiteralPath $PSAppDeployToolkitPath) -eq $false) {
+        # --- Generate content wrappers ---
+        $wrapperContent = New-MsiWrapperContent -MsiFileName $MsiFileName
+        Write-ContentWrappers -OutputPath $localContentPath `
+            -InstallPs1Content $wrapperContent.Install `
+            -UninstallPs1Content $wrapperContent.Uninstall
+    }
 
     # --- Write stage manifest ---
-    $publisher = $manufacturer
-    if ([string]::IsNullOrWhiteSpace($publisher)) { $publisher = "Igor Pavlov" }
-
-    $appName = $productName
-
     $manifestPath = Join-Path $localContentPath "stage-manifest.json"
     Write-StageManifest -Path $manifestPath -ManifestData @{
-        AppName         = $appName
-        Publisher       = $publisher
+        AppName         = $AppName
+        DisplayName     = $AppName
+        Publisher       = $Publisher
         SoftwareVersion = $displayVersion
+        Architecture    = "x64"
+        Language        = "MUI"
         InstallerFile   = $MsiFileName
         InstallerType   = "MSI"
         InstallArgs     = "/qn /norestart"
@@ -265,7 +301,10 @@ function Invoke-Stage7Zip {
             DisplayVersion      = $arpEntry.DisplayVersion
             Is64Bit             = $arpEntry.Is64Bit
         }
+        IconFileName    = if(Test-Path -LiteralPath $localIco) { [System.IO.Path]::GetFileName($DownloadIconUrl) } else { "" }
     }
+
+    Set-Content -LiteralPath (Join-Path $BaseDownloadRoot "staged-version.txt") -Value $productVersionRaw -Encoding ASCII -ErrorAction Stop
 
     Write-Log ""
     Write-Log "Stage complete               : $localContentPath"
@@ -284,6 +323,13 @@ function Invoke-Package7Zip {
     Write-Log "7-Zip (x64) - PACKAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
+
+    if (-not (Test-IsAdmin)) {
+        Write-Log "Run PowerShell as Administrator." -Level WARN
+    }
+
+    Write-Log ""
+    Write-Log "PSAppDeployToolkitPath: $PSAppDeployToolkitPath"
 
     # --- Resolve version from local staging ---
     Initialize-Folder -Path $BaseDownloadRoot
@@ -317,31 +363,28 @@ function Invoke-Package7Zip {
         throw "Network root path not accessible: $FileServerPath"
     }
 
-    $networkContentPath = Get-NetworkContentPath -FileServerPath $FileServerPath -VendorFolder $VendorFolder -AppFolder $AppFolder -Version $manifest.SoftwareVersion -Layout $ContentLayout
+    $publish = Publish-StagedContentToNetwork `
+        -FileServerPath $FileServerPath `
+        -PathPattern $ApplicationSharePattern `
+        -Manifest $manifest `
+        -LocalContentPath $localContentPath `
+        -ManifestPath $manifestPath `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath
 
-    Write-Log "Network content path         : $networkContentPath"
-    Write-Log ""
+    $networkAppRoot = $publish.NetworkAppRoot
+    $networkContentPath = $publish.NetworkContentPath
+    $manifest = $publish.Manifest
 
-    # --- Copy staged content to network ---
-    $localFiles = Get-ChildItem -Path $localContentPath -File -ErrorAction Stop
-    foreach ($f in $localFiles) {
-        if ($f.Name -eq "stage-manifest.json") { continue }
-        $dest = Join-Path $networkContentPath $f.Name
-        if (-not (Test-Path -LiteralPath $dest)) {
-            Copy-Item -LiteralPath $f.FullName -Destination $dest -Force -ErrorAction Stop
-            Write-Log "Copied to network            : $($f.Name)"
-        }
-        else {
-            Write-Log "Already on network           : $($f.Name)"
-        }
-    }
-
+    Write-Log "Starting to create MECM application..."
     # --- MECM application ---
     New-MECMApplicationFromManifest `
         -Manifest $manifest `
+        -AppNamePattern $AppNamePattern `
         -SiteCode $SiteCode `
+        -MCMAppFolder $MECMApplicationFolder `
         -Comment $Comment `
-        -NetworkContentPath $networkContentPath `
+        -NetworkContentPath $networkAppRoot `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
         -EstimatedRuntimeMins $EstimatedRuntimeMins `
         -MaximumRuntimeMins $MaximumRuntimeMins
 }

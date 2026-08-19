@@ -1,4 +1,4 @@
-﻿<#
+<#
 Vendor: NVIDIA
 App: NVIDIA Graphics Driver - GeForce Game Ready (x64)
 CMName: NVIDIA Graphics Driver - GeForce Game Ready
@@ -68,17 +68,20 @@ UpdateCadenceDays: 30
 .REQUIREMENTS
     - PowerShell 5.1
     - ConfigMgr Admin Console installed
+    - Local administrator
     - Write access to FileServerPath
     - Outbound HTTPS to gfwsl.geforce.com and us.download.nvidia.com
 #>
 
 param(
     [string]$SiteCode = "MCM",
+    [string]$MECMApplicationFolder = "",
     [string]$Comment = "",
     [string]$FileServerPath = "\\fileserver\sccm$",
-    [ValidateSet('Nested','Flat')]
-    [string]$ContentLayout = "Nested",
+    [string]$ApplicationSharePattern = "Applications\{ProductName}\{Version}",
+    [string]$AppNamePattern = "{AppName} - {SoftwareVersion}",
     [string]$DownloadRoot = "C:\temp\ap",
+    [String]$PSAppDeployToolkitPath = "",
     [int]$EstimatedRuntimeMins = 15,
     [int]$MaximumRuntimeMins = 30,
     [string]$LogPath,
@@ -103,6 +106,7 @@ if ($StageOnly -and $PackageOnly) {
 # a stable lookup key for "the latest Game Ready driver for current cards"
 # rather than a per-GPU selector. Update only if NVIDIA retires PSID 131.
 $NvidiaApiBaseUrl = "https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/services/AjaxDriverService.php"
+$DownloadIconUrl  = ""
 $NvidiaPsid       = 131
 $NvidiaPfid       = 1066
 $NvidiaOsId       = 57       # Windows 10 64-bit (DCH driver covers Win10 + Win11 in one package)
@@ -114,10 +118,10 @@ $NvidiaUpCrd      = 0        # Game Ready branch (1 = Production Branch / Enterp
 # DCH installs. Same GUID for Game Ready and RTX Enterprise -- the package
 # name differs only by AppFolder/AppName, so the two MECM apps coexist on
 # the share without colliding.
-$NvidiaDisplayDriverArpKey = "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_Display.Driver"
+#$NvidiaDisplayDriverArpKey = "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_Display.Driver"
 
-$VendorFolder = "NVIDIA"
-$AppFolder    = "NVIDIA Graphics Driver - GeForce Game Ready"
+$Publisher      = "NVIDIA Corporation"
+$AppName        = "NVIDIA Graphics Driver"
 
 $BaseDownloadRoot = Join-Path $DownloadRoot "NvidiaGeForce"
 
@@ -131,14 +135,23 @@ function Resolve-NvidiaGeForceLatest {
     #>
     param([switch]$Quiet)
 
+    $NvidiaLangId = Get-LanguageCode -Language "de-DE"
+
+    if($null -eq $NvidiaLangId) {
+        Write-Log "Failed to resolve language code for de-DE. Defaulting to 1033 (en-US)." -Level WARNING
+        $NvidiaLangId = 1033
+    }
+
     $url = "{0}?func=DriverManualLookup&psid={1}&pfid={2}&osID={3}&languageCode={4}&beta=0&isWHQL=1&dltype=-1&dch={5}&upCRD={6}&qnf=0&sort1=0&numberOfResults=10" -f `
         $NvidiaApiBaseUrl, $NvidiaPsid, $NvidiaPfid, $NvidiaOsId, $NvidiaLangId, $NvidiaDch, $NvidiaUpCrd
 
     Write-Log "NVIDIA driver API URL        : $url" -Quiet:$Quiet
 
     try {
-        $json = (curl.exe -L --fail --silent --show-error $url) -join ''
-        if ($LASTEXITCODE -ne 0) { throw "AjaxDriverService.php returned exit $LASTEXITCODE" }
+        $json = Get-PageContentWithFallback -Url $url -Quiet:$Quiet
+        if ([string]::IsNullOrWhiteSpace($json)) {
+            throw "Could not retrieve $url using either Invoke-WebRequest or curl.exe."
+        }
 
         $data = ConvertFrom-Json $json
         if (-not $data.IDS -or @($data.IDS).Count -eq 0) {
@@ -205,6 +218,21 @@ function Invoke-StageNvidiaGeForce {
         Write-Log "Local installer exists. Skipping download."
     }
 
+    if($DownloadIconUrl){
+        Write-Log "Downloading ICO..."
+        try {
+            $localIco = ([IO.Path]::Combine($BaseDownloadRoot, $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl))))
+            Invoke-DownloadWithRetry -Url $DownloadIconUrl -OutFile $localIco
+        }
+        catch {
+            Write-Log "Failed to download ICO: $($_.Exception.Message)" -Level WARN
+            $localIco = ""
+        }
+    }
+
+    Write-Log ""
+    Write-Log "PSAppDeployToolkitPath: $PSAppDeployToolkitPath"
+
     # --- Versioned local content folder ---
     $localContentPath = Join-Path $BaseDownloadRoot $version
     Initialize-Folder -Path $localContentPath
@@ -237,19 +265,47 @@ exit `$proc.ExitCode
 exit `$proc.ExitCode
 "@
 
-    Write-ContentWrappers -OutputPath $localContentPath `
-        -InstallPs1Content $installPs1 `
-        -UninstallPs1Content $uninstallPs1
+    $detectionPs1 = @"
+`$requiredVersion = "$($release.Version)"
 
-    # --- Stage manifest ---
-    $publisher = "NVIDIA Corporation"
-    $appName   = "NVIDIA Graphics Driver - GeForce Game Ready $version"
+`$driver = gwmi win32_VideoController | Where-Object {`$_.Name.contains("NVIDIA")}
+
+if (`$driver -is [system.array]) # if we have 2+ gpus, we get an array
+{ 
+	`$driver_version = `$driver[0].DriverVersion 
+} else
+{ 
+	`$driver_version = `$driver.DriverVersion 
+}
+
+`$driver_version = ([regex]"[0-9.]{6}`$").match(`$driver_version).value.Replace(".","").Insert(3,'.')
+
+`$us = Get-childItem -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object {`$_.DisplayName -like "*NVIDIA*" -and `$_.NVI2_Package -like "*DisplayDriver*"} | select DisplayName, UninstallString
+
+`$result = [bool](`$driver_version -ge `$requiredVersion) -and [bool](`$us -ne $null) -and [bool]((`$us.DisplayName -replace '[^.0-9]', "") -ge `$requiredVersion)
+
+if(`$result){
+    Write-Host "Installed"
+} else {
+	#Write-Host "Not Installed"
+}
+"@
+    
+    if([string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $true -or (Test-Path -LiteralPath $PSAppDeployToolkitPath) -eq $false) {
+        # --- Generate content wrappers ---
+        Write-ContentWrappers -OutputPath $localContentPath `
+            -InstallPs1Content $installPs1 `
+            -UninstallPs1Content $uninstallPs1
+    }
 
     $manifestPath = Join-Path $localContentPath "stage-manifest.json"
     Write-StageManifest -Path $manifestPath -ManifestData @{
         AppName          = $appName
+        DisplayName      = $AppName
         Publisher        = $publisher
         SoftwareVersion  = $version
+        Architecture     = "x64"
+        Language         = (Get-LanguageFromCode -LCID "$NvidiaLangId")
         InstallerFile    = $installerName
         InstallerType    = "EXE"
         InstallArgs      = "-s -noreboot -clean"
@@ -257,12 +313,11 @@ exit `$proc.ExitCode
         UninstallArgs    = "-uninstall -s -noreboot"
         RunningProcess   = @("nvcontainer","NVDisplay.Container","nvsphelper64","NVIDIA Web Helper")
         Detection        = @{
-            Type                = "RegistryKeyValue"
-            RegistryKeyRelative = $NvidiaDisplayDriverArpKey
-            ValueName           = "DisplayVersion"
-            ExpectedValue       = $version
-            Is64Bit             = $true
+            Type                = "Script"
+            ScriptLanguage      = "PowerShell"
+            ScriptText          = $detectionPs1
         }
+        IconFileName    = if($localIco -and (Test-Path -LiteralPath $localIco)) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
     }
 
     Write-Log ""
@@ -301,33 +356,34 @@ function Invoke-PackageNvidiaGeForce {
     Write-Log "Detection Value              : $($manifest.Detection.ExpectedValue)"
     Write-Log ""
 
+    # --- Network share ---
     if (-not (Test-NetworkShareAccess -Path $FileServerPath)) {
         throw "Network root path not accessible: $FileServerPath"
     }
 
-    $networkContentPath = Get-NetworkContentPath -FileServerPath $FileServerPath -VendorFolder $VendorFolder -AppFolder $AppFolder -Version $manifest.SoftwareVersion -Layout $ContentLayout
+    $publish = Publish-StagedContentToNetwork `
+        -FileServerPath $FileServerPath `
+        -PathPattern $ApplicationSharePattern `
+        -Manifest $manifest `
+        -LocalContentPath $localContentPath `
+        -ManifestPath $manifestPath `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
+        -SkipStageManifestCopy
 
-    Write-Log "Network content path         : $networkContentPath"
-    Write-Log ""
+    $networkAppRoot = $publish.NetworkAppRoot
+    $networkContentPath = $publish.NetworkContentPath
+    $manifest = $publish.Manifest
 
-    $localFiles = Get-ChildItem -Path $localContentPath -File -ErrorAction Stop
-    foreach ($f in $localFiles) {
-        if ($f.Name -eq "stage-manifest.json") { continue }
-        $dest = Join-Path $networkContentPath $f.Name
-        if (-not (Test-Path -LiteralPath $dest)) {
-            Copy-Item -LiteralPath $f.FullName -Destination $dest -Force -ErrorAction Stop
-            Write-Log "Copied to network            : $($f.Name)"
-        }
-        else {
-            Write-Log "Already on network           : $($f.Name)"
-        }
-    }
-
+    Write-Log "Starting to create MECM application..."
+    # --- MECM application ---
     New-MECMApplicationFromManifest `
         -Manifest $manifest `
+        -AppNamePattern $AppNamePattern `
         -SiteCode $SiteCode `
+        -MCMAppFolder $MECMApplicationFolder `
         -Comment $Comment `
-        -NetworkContentPath $networkContentPath `
+        -NetworkContentPath $networkAppRoot `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
         -EstimatedRuntimeMins $EstimatedRuntimeMins `
         -MaximumRuntimeMins $MaximumRuntimeMins
 }
