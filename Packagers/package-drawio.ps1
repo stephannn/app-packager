@@ -130,7 +130,7 @@ function Get-LatestDrawioRelease {
 function Invoke-StageDrawio {
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "draw.io - STAGE phase"
+    Write-Log "$AppName - STAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 
@@ -251,7 +251,7 @@ function Invoke-StageDrawio {
             ExpectedValue       = $productVersionRaw
             Is64Bit             = $true
         }
-        IconFileName    = if(Test-Path -LiteralPath $localIco) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
+        IconFileName    = if($localIco -and (Test-Path -LiteralPath $localIco)) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
     }
 
     Set-Content -LiteralPath (Join-Path $BaseDownloadRoot "staged-version.txt") -Value $productVersionRaw -Encoding ASCII -ErrorAction Stop
@@ -270,7 +270,7 @@ function Invoke-StageDrawio {
 function Invoke-PackageDrawio {
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "draw.io - PACKAGE phase"
+    Write-Log "$AppName - PACKAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 

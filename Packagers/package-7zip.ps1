@@ -174,7 +174,7 @@ function Get-7ZipDisplayVersion {
 function Invoke-Stage7Zip {
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "7-Zip (x64) - STAGE phase"
+    Write-Log "$AppName - STAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 
@@ -303,7 +303,7 @@ function Invoke-Stage7Zip {
             DisplayVersion      = $arpEntry.DisplayVersion
             Is64Bit             = $arpEntry.Is64Bit
         }
-        IconFileName    = if(Test-Path -LiteralPath $localIco) { [System.IO.Path]::GetFileName($DownloadIconUrl) } else { "" }
+        IconFileName    = if($localIco -and (Test-Path -LiteralPath $localIco)) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
     }
 
     Set-Content -LiteralPath (Join-Path $BaseDownloadRoot "staged-version.txt") -Value $productVersionRaw -Encoding ASCII -ErrorAction Stop
@@ -322,7 +322,7 @@ function Invoke-Stage7Zip {
 function Invoke-Package7Zip {
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "7-Zip (x64) - PACKAGE phase"
+    Write-Log "$AppName - PACKAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 

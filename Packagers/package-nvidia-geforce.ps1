@@ -83,7 +83,7 @@ param(
     [string]$DownloadRoot = "C:\temp\ap",
     [String]$PSAppDeployToolkitPath = "",
     [int]$EstimatedRuntimeMins = 15,
-    [int]$MaximumRuntimeMins = 30,
+    [int]$MaximumRuntimeMins = 45,
     [string]$LogPath,
     [switch]$GetLatestVersionOnly,
     [switch]$StageOnly,
