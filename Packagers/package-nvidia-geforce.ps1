@@ -122,6 +122,7 @@ $NvidiaUpCrd      = 0        # Game Ready branch (1 = Production Branch / Enterp
 
 $Publisher      = "NVIDIA Corporation"
 $AppName        = "NVIDIA Graphics Driver"
+$Language       = "de-DE"
 
 $BaseDownloadRoot = Join-Path $DownloadRoot "NvidiaGeForce"
 
@@ -135,10 +136,10 @@ function Resolve-NvidiaGeForceLatest {
     #>
     param([switch]$Quiet)
 
-    $NvidiaLangId = Get-LanguageCode -Language "de-DE"
+    $NvidiaLangId = Get-LanguageCode -Language $Language
 
     if($null -eq $NvidiaLangId) {
-        Write-Log "Failed to resolve language code for de-DE. Defaulting to 1033 (en-US)." -Level WARNING
+        Write-Log "Failed to resolve language code for $Language. Defaulting to 1033 (en-US)." -Level WARNING
         $NvidiaLangId = 1033
     }
 
@@ -371,7 +372,7 @@ function Invoke-PackageNvidiaGeForce {
         -SkipStageManifestCopy
 
     $networkAppRoot = $publish.NetworkAppRoot
-    $networkContentPath = $publish.NetworkContentPath
+    #$networkContentPath = $publish.NetworkContentPath
     $manifest = $publish.Manifest
 
     Write-Log "Starting to create MECM application..."

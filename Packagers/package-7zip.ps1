@@ -194,14 +194,16 @@ function Invoke-Stage7Zip {
     Write-Log "Downloading MSI..."
     Invoke-DownloadWithRetry -Url $msiUrl -OutFile $localMsi
 
-    Write-Log "Downloading ICO..."
-    try {
-        $localIco = ([IO.Path]::Combine($BaseDownloadRoot, $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl))))
-        Invoke-DownloadWithRetry -Url $DownloadIconUrl -OutFile $localIco
-    }
-    catch {
-        Write-Log "Failed to download ICO: $($_.Exception.Message)" -Level WARN
-        $localIco = ""
+    if($DownloadIconUrl){
+        Write-Log "Downloading ICO..."
+        try {
+            $localIco = ([IO.Path]::Combine($BaseDownloadRoot, $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl))))
+            Invoke-DownloadWithRetry -Url $DownloadIconUrl -OutFile $localIco
+        }
+        catch {
+            Write-Log "Failed to download ICO: $($_.Exception.Message)" -Level WARN
+            $localIco = ""
+        }
     }
 
     Write-Log ""
