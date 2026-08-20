@@ -85,6 +85,7 @@ Try {
 		InstallArgs     = $JsonConfig.InstallArgs
 		UninstallFile   = $JsonConfig.UninstallCommand
 		UninstallArgs   = $JsonConfig.UninstallArgs
+		ProductCode		= $JsonConfig.ProductCode
 		Processes       = $JsonConfig.RunningProcess
 		Detection       = $JsonConfig.Detection
 	}
@@ -134,6 +135,10 @@ Try {
 	## Variables: Environment
 	If (Test-Path -LiteralPath 'variable:HostInvocation') { $InvocationInfo = $HostInvocation } Else { $InvocationInfo = $MyInvocation }
 	[string]$scriptDirectory = Split-Path -Path $InvocationInfo.MyCommand.Definition -Parent
+	
+	if([string]::IsNullOrEmpty($PackageName) -eq $false){
+		$logName = "$($PackageName)_$($deploymentType.ToUpper()).log"
+	}
 	
 	## Dot source the required App Deploy Toolkit Functions
 	Try {
