@@ -311,7 +311,7 @@ if(`$result){
         InstallerType    = "EXE"
         InstallArgs      = "-s -noreboot -clean"
         UninstallCommand = "powershell.exe"
-        UninstallArgs    = "-NoProfile -ExecutionPolicy Bypass -Command `"& { `$us = Get-ChildItem -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object { `$_.DisplayName -like '*NVIDIA*' -and `$_.NVI2_Package -like '*DisplayDriver*' } | Select-Object -First 1 -ExpandProperty UninstallString; `$unused, `$filePath, `$argList = `$us -split [char]34, 3; `$argList += ' -silent -deviceinitiated'; Start-Process -FilePath ([System.IO.Path]::Combine($env:windir, 'SysWOW64\\RunDll32.EXE')) -ArgumentList `$argList -Wait }`""
+        UninstallArgs    = "-NoProfile -ExecutionPolicy Bypass -Command `"& { `$us = Get-ChildItem -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object { `$_.DisplayName -like '*NVIDIA*' -and `$_.NVI2_Package -like '*DisplayDriver*' } | Select-Object -First 1 -ExpandProperty UninstallString; `$unused, `$filePath, `$argList = `$us -split [char]34, 3; `$argList += ' -silent -deviceinitiated'; Start-Process -FilePath ([System.IO.Path]::Combine(`$env:windir, 'SysWOW64\\RunDll32.EXE')) -ArgumentList `$argList -Wait }`""
         RunningProcess   = @("nvcontainer","NVDisplay.Container","nvsphelper64","NVIDIA Web Helper")
         Detection        = @{
             Type                = "Script"
