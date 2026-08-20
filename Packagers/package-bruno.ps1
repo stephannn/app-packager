@@ -113,11 +113,11 @@ function Get-LatestBrunoRelease {
         $asset = $release.assets | Where-Object { $_.name -match '\.msi$' -and $_.name -notmatch 'arm' } | Select-Object -First 1
         if (-not $asset) { throw "No MSI asset found in release." }
 
-        Write-Log "Latest Bruno version       : $version" -Quiet:$Quiet
+        Write-Log "Latest $AppName version       : $version" -Quiet:$Quiet
         return @{ Version = $version; FileName = $asset.name; DownloadUrl = $asset.browser_download_url }
     }
     catch {
-        Write-Log "Failed to get Bruno version: $($_.Exception.Message)" -Level ERROR
+        Write-Log "Failed to get $AppName version: $($_.Exception.Message)" -Level ERROR
         return $null
     }
 }
@@ -312,7 +312,7 @@ function Invoke-PackageBruno {
         -SkipStageManifestCopy
 
     $networkAppRoot = $publish.NetworkAppRoot
-    $networkContentPath = $publish.NetworkContentPath
+    #$networkContentPath = $publish.NetworkContentPath
     $manifest = $publish.Manifest
 
     Write-Log "Starting to create MECM application..."

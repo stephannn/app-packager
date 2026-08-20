@@ -1,4 +1,4 @@
-﻿<#
+<#
 Vendor: DBeaver Corp
 App: DBeaver Community
 CMName: DBeaver Community
@@ -54,6 +54,7 @@ DownloadPageUrl: https://dbeaver.io/download/
     - PowerShell 5.1
     - ConfigMgr Admin Console installed
     - RBAC permissions to create Applications and Deployment Types
+    - Local administrator
     - Write access to FileServerPath
 #>
 
@@ -61,9 +62,10 @@ param(
     [string]$SiteCode = "MCM",
     [string]$Comment = "",
     [string]$FileServerPath = "\\fileserver\sccm$",
-    [ValidateSet('Nested','Flat')]
-    [string]$ContentLayout = "Nested",
+    [string]$ApplicationSharePattern = "Applications\{ProductName}\{Version}",
+    [string]$AppNamePattern = "{AppName} - {SoftwareVersion}",
     [string]$DownloadRoot = "C:\temp\ap",
+    [String]$PSAppDeployToolkitPath = "",
     [int]$EstimatedRuntimeMins = 15,
     [int]$MaximumRuntimeMins = 30,
     [string]$LogPath,
@@ -85,9 +87,10 @@ if ($StageOnly -and $PackageOnly) {
 # --- Configuration ---
 # DBeaver tags have no v prefix (e.g. "25.3.5")
 $GitHubApiUrl = "https://api.github.com/repos/dbeaver/dbeaver/releases/latest"
+$DownloadIconUrl = "https://github.com/dbeaver/dbeaver/wiki/images/dbeaver-icon-64x64.png"
 
-$VendorFolder = "DBeaver"
-$AppFolder    = "DBeaver Community"
+$Publisher      = "DBeaver Corp"
+$AppName        = "DBeaver Community"
 
 $BaseDownloadRoot = Join-Path $DownloadRoot "DBeaver"
 
@@ -100,8 +103,10 @@ function Get-LatestDBeaverRelease {
     Write-Log "GitHub releases API          : $GitHubApiUrl" -Quiet:$Quiet
 
     try {
-        $json = (curl.exe -L --fail --silent --show-error $GitHubApiUrl) -join ''
-        if ($LASTEXITCODE -ne 0) { throw "Failed to query GitHub releases API." }
+        $json = Get-PageContentWithFallback -Url $GitHubApiUrl -Quiet:$Quiet
+        if ([string]::IsNullOrWhiteSpace($json)) {
+            throw "Could not retrieve $GitHubApiUrl using either Invoke-WebRequest or curl.exe."
+        }
 
         $release = ConvertFrom-Json $json
         # DBeaver tags have no v prefix
@@ -130,7 +135,7 @@ function Get-LatestDBeaverRelease {
 function Invoke-StageDBeaver {
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "DBeaver Community - STAGE phase"
+    Write-Log "$AppName - STAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 
@@ -160,6 +165,21 @@ function Invoke-StageDBeaver {
         Write-Log "Local installer exists. Skipping download."
     }
 
+        if($DownloadIconUrl){
+        Write-Log "Downloading ICO..."
+        try {
+            $localIco = ([IO.Path]::Combine($BaseDownloadRoot, $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl))))
+            Invoke-DownloadWithRetry -Url $DownloadIconUrl -OutFile $localIco
+        }
+        catch {
+            Write-Log "Failed to download ICO: $($_.Exception.Message)" -Level WARN
+            $localIco = ""
+        }
+    }
+
+    Write-Log ""
+    Write-Log "PSAppDeployToolkitPath: $PSAppDeployToolkitPath"
+
     # --- Versioned local content folder ---
     $localContentPath = Join-Path $BaseDownloadRoot $version
     Initialize-Folder -Path $localContentPath
@@ -171,6 +191,14 @@ function Invoke-StageDBeaver {
     }
     else {
         Write-Log "Staged EXE exists. Skipping copy."
+    }
+    if(-not (Test-Path -LiteralPath (Join-Path $localContentPath ([System.IO.Path]::GetFileName($localIco))))) {
+        Copy-Item -LiteralPath $localIco -Destination (Join-Path $localContentPath ([System.IO.Path]::GetFileName($localIco))) -Force -ErrorAction Stop
+        Write-Log "Copied ICO to staged folder  : $localContentPath"
+    }
+    else {
+        Write-Log "Staged ICO exists. Skipping copy."
+
     }
 
     # --- Generate content wrappers ---
@@ -193,17 +221,17 @@ function Invoke-StageDBeaver {
         'exit 0'
     ) -join "`r`n"
 
-    Write-ContentWrappers -OutputPath $localContentPath `
-        -InstallPs1Content $installPs1 `
-        -UninstallPs1Content $uninstallPs1 `
-        -InstallBatExitCode '3010' `
-        -UninstallBatExitCode '3010'
+    if([string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $true -or (Test-Path -LiteralPath $PSAppDeployToolkitPath) -eq $false) {
+        # --- Generate content wrappers ---
+        Write-ContentWrappers -OutputPath $localContentPath `
+            -InstallPs1Content $installPs1 `
+            -UninstallPs1Content $uninstallPs1 `
+            -InstallBatExitCode '3010' `
+            -UninstallBatExitCode '3010'
+    }
 
     # --- Write stage manifest ---
     $detectionPath = "{0}\DBeaver" -f $env:ProgramFiles
-
-    $appName   = "DBeaver $version"
-    $publisher = "DBeaver Corp"
 
     Write-Log "Detection path               : $detectionPath"
     Write-Log "Detection file               : dbeaver.exe"
@@ -212,8 +240,11 @@ function Invoke-StageDBeaver {
     $manifestPath = Join-Path $localContentPath "stage-manifest.json"
     Write-StageManifest -Path $manifestPath -ManifestData @{
         AppName          = $appName
+        DisplayName      = $AppName
         Publisher        = $publisher
         SoftwareVersion  = $version
+        Architecture    = "x64"
+        Language        = "MUI"
         InstallerFile    = $installerFileName
         InstallerType    = "EXE"
         InstallArgs      = "/allusers /S"
@@ -228,6 +259,7 @@ function Invoke-StageDBeaver {
             Operator      = "GreaterEquals"
             ExpectedValue = $version
             Is64Bit       = $true
+        IconFileName    = if($localIco -and (Test-Path -LiteralPath $localIco)) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
         }
     }
 
@@ -247,7 +279,7 @@ function Invoke-StageDBeaver {
 function Invoke-PackageDBeaver {
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "DBeaver Community - PACKAGE phase"
+    Write-Log "$AppName - PACKAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 
@@ -269,33 +301,34 @@ function Invoke-PackageDBeaver {
     Write-Log "SoftwareVersion              : $($manifest.SoftwareVersion)"
     Write-Log ""
 
+    # --- Network share ---
     if (-not (Test-NetworkShareAccess -Path $FileServerPath)) {
         throw "Network root path not accessible: $FileServerPath"
     }
 
-    $networkContentPath = Get-NetworkContentPath -FileServerPath $FileServerPath -VendorFolder $VendorFolder -AppFolder $AppFolder -Version $manifest.SoftwareVersion -Layout $ContentLayout
+    $publish = Publish-StagedContentToNetwork `
+        -FileServerPath $FileServerPath `
+        -PathPattern $ApplicationSharePattern `
+        -Manifest $manifest `
+        -LocalContentPath $localContentPath `
+        -ManifestPath $manifestPath `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
+        -SkipStageManifestCopy
 
-    Write-Log "Network content path         : $networkContentPath"
-    Write-Log ""
+    $networkAppRoot = $publish.NetworkAppRoot
+    #$networkContentPath = $publish.NetworkContentPath
+    $manifest = $publish.Manifest
 
-    $localFiles = Get-ChildItem -Path $localContentPath -File -ErrorAction Stop
-    foreach ($f in $localFiles) {
-        if ($f.Name -eq "stage-manifest.json") { continue }
-        $dest = Join-Path $networkContentPath $f.Name
-        if (-not (Test-Path -LiteralPath $dest)) {
-            Copy-Item -LiteralPath $f.FullName -Destination $dest -Force -ErrorAction Stop
-            Write-Log "Copied to network            : $($f.Name)"
-        }
-        else {
-            Write-Log "Already on network           : $($f.Name)"
-        }
-    }
-
+    Write-Log "Starting to create MECM application..."
+    # --- MECM application ---
     New-MECMApplicationFromManifest `
         -Manifest $manifest `
+        -AppNamePattern $AppNamePattern `
         -SiteCode $SiteCode `
+        -MCMAppFolder $MECMApplicationFolder `
         -Comment $Comment `
-        -NetworkContentPath $networkContentPath `
+        -NetworkContentPath $networkAppRoot `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
         -EstimatedRuntimeMins $EstimatedRuntimeMins `
         -MaximumRuntimeMins $MaximumRuntimeMins
 }
@@ -321,7 +354,7 @@ try {
 
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "DBeaver Community Auto-Packager starting"
+    Write-Log "$AppName Auto-Packager starting"
     Write-Log ("=" * 60)
     Write-Log ""
     Write-Log ("RunAsUser                    : {0}\{1}" -f $env:USERDOMAIN,$env:USERNAME)

@@ -121,7 +121,7 @@ $NvidiaUpCrd      = 0        # Game Ready branch (1 = Production Branch / Enterp
 #$NvidiaDisplayDriverArpKey = "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_Display.Driver"
 
 $Publisher      = "NVIDIA Corporation"
-$AppName        = "NVIDIA Graphics Driver"
+$AppName        = "GeForce Driver"
 $Language       = "de-DE"
 
 $BaseDownloadRoot = Join-Path $DownloadRoot "NvidiaGeForce"
@@ -283,7 +283,7 @@ if (`$driver -is [system.array]) # if we have 2+ gpus, we get an array
 
 `$us = Get-childItem -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object {`$_.DisplayName -like "*NVIDIA*" -and `$_.NVI2_Package -like "*DisplayDriver*"} | select DisplayName, UninstallString
 
-`$result = [bool](`$driver_version -ge `$requiredVersion) -and [bool](`$us -ne $null) -and [bool]((`$us.DisplayName -replace '[^.0-9]', "") -ge `$requiredVersion)
+`$result = [bool](`$driver_version -ge `$requiredVersion) -and [bool](`$us -ne `$null) -and [bool]((`$us.DisplayName -replace '[^.0-9]', "") -ge `$requiredVersion)
 
 if(`$result){
     Write-Host "Installed"
@@ -310,8 +310,8 @@ if(`$result){
         InstallerFile    = $installerName
         InstallerType    = "EXE"
         InstallArgs      = "-s -noreboot -clean"
-        UninstallCommand = $installerName
-        UninstallArgs    = "-uninstall -s -noreboot"
+        UninstallCommand = "powershell.exe"
+        UninstallArgs    = "-NoProfile -ExecutionPolicy Bypass -Command `"& { `$us = Get-ChildItem -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object { `$_.DisplayName -like '*NVIDIA*' -and `$_.NVI2_Package -like '*DisplayDriver*' } | Select-Object -First 1 -ExpandProperty UninstallString; `$unused, `$filePath, `$argList = `$us -split [char]34, 3; `$argList += ' -silent -deviceinitiated'; Start-Process -FilePath ([System.IO.Path]::Combine($env:windir, 'SysWOW64\\RunDll32.EXE')) -ArgumentList `$argList -Wait }`""
         RunningProcess   = @("nvcontainer","NVDisplay.Container","nvsphelper64","NVIDIA Web Helper")
         Detection        = @{
             Type                = "Script"
