@@ -269,7 +269,7 @@ function Invoke-StageGIMP {
                 },
                 @{
                     Type                = "RegistryKey"
-                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($displayVersion)_$($Language)_$($Architecture)_01"
+                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($version)_$($Language)_$($Architecture)_01"
                     Is64Bit             = $arpEntry.Is64Bit
                 }
             )
