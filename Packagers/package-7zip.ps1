@@ -94,8 +94,10 @@ if ($StageOnly -and $PackageOnly) {
 $DownloadPageUrl = "https://www.7-zip.org/download.html"
 $DownloadIconUrl = "https://www.7-zip.org/7ziplogo.png"
 
-$Publisher  = "Igor Pavlov"
-$AppName    = "7-Zip"
+$Publisher    = "Igor Pavlov"
+$AppName      = "7-Zip"
+$Language     = "MUI"
+$Architecture = "x64"
 
 $BaseDownloadRoot = Join-Path $DownloadRoot $AppName
 $MsiFileName      = "7zip-x64.msi"
@@ -243,13 +245,12 @@ function Invoke-Stage7Zip {
     else {
         Write-Log "Staged MSI exists. Skipping copy."
     }
-    if(-not (Test-Path -LiteralPath (Join-Path $localContentPath ([System.IO.Path]::GetFileName($DownloadIconUrl))))) {
-        Copy-Item -LiteralPath $localIco -Destination (Join-Path $localContentPath ([System.IO.Path]::GetFileName($DownloadIconUrl))) -Force -ErrorAction Stop
+    if(-not (Test-Path -LiteralPath (Join-Path $localContentPath ([System.IO.Path]::GetFileName($localIco))))) {
+        Copy-Item -LiteralPath $localIco -Destination (Join-Path $localContentPath ([System.IO.Path]::GetFileName($localIco))) -Force -ErrorAction Stop
         Write-Log "Copied ICO to staged folder  : $localContentPath"
     }
     else {
         Write-Log "Staged ICO exists. Skipping copy."
-
     }
 
     # --- Derive ARP detection from MSI properties ---
@@ -287,8 +288,8 @@ function Invoke-Stage7Zip {
         DisplayName     = $AppName
         Publisher       = $Publisher
         SoftwareVersion = $displayVersion
-        Architecture    = "x64"
-        Language        = "MUI"
+        Architecture    = $Architecture
+        Language        = $Language
         InstallerFile   = $MsiFileName
         InstallerType   = "MSI"
         InstallArgs     = "/qn /norestart"
@@ -296,12 +297,23 @@ function Invoke-Stage7Zip {
         ProductCode     = $productCode
         RunningProcess  = @("7zFM", "7zG")
         Detection       = @{
-            Type                = "RegistryKeyValue"
-            RegistryKeyRelative = $arpEntry.RegistryKeyRelative
-            ValueName           = "DisplayVersion"
-            DisplayName         = $arpEntry.DisplayName
-            DisplayVersion      = $arpEntry.DisplayVersion
-            Is64Bit             = $arpEntry.Is64Bit
+            Type      = "Compound"
+            Connector = "AND"  # Set to "And" or "Or"
+            Clauses   = @(
+                @{
+                    Type                = "RegistryKeyValue"
+                    RegistryKeyRelative = $arpEntry.RegistryKeyRelative
+                    ValueName           = "DisplayVersion"
+                    DisplayName         = $arpEntry.DisplayName
+                    DisplayVersion      = $arpEntry.DisplayVersion
+                    Is64Bit             = $arpEntry.Is64Bit
+                },
+                @{
+                    Type                = "RegistryKey"
+                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($displayVersion)_$($Language)_$($Architecture)_01"
+                    Is64Bit             = $arpEntry.Is64Bit
+                }
+            )
         }
         IconFileName    = if($localIco -and (Test-Path -LiteralPath $localIco)) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
     }
@@ -374,7 +386,7 @@ function Invoke-Package7Zip {
         -PSAppDeployToolkitPath $PSAppDeployToolkitPath
 
     $networkAppRoot = $publish.NetworkAppRoot
-    $networkContentPath = $publish.NetworkContentPath
+    #$networkContentPath = $publish.NetworkContentPath
     $manifest = $publish.Manifest
 
     Write-Log "Starting to create MECM application..."
@@ -423,7 +435,7 @@ try {
 
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "7-Zip (x64) Auto-Packager starting"
+    Write-Log "$AppName Auto-Packager starting"
     Write-Log ("=" * 60)
     Write-Log ""
     Write-Log ("RunAsUser                    : {0}\{1}" -f $env:USERDOMAIN,$env:USERNAME)

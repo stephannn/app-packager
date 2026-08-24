@@ -91,6 +91,8 @@ $DownloadIconUrl = "https://raw.githubusercontent.com/audacity/audacity/refs/hea
 
 $Publisher = "Audacity Team"
 $AppName    = "Audacity"
+$Language     = "MUI"
+$Architecture = "x64"
 
 $BaseDownloadRoot = Join-Path $DownloadRoot $AppName
 
@@ -228,21 +230,33 @@ function Invoke-StageAudacity {
         DisplayName     = $AppName
         Publisher       = $Publisher
         SoftwareVersion = $version
-        Architecture    = "x64"
-        Language        = "MUI"
+        Architecture    = $Architecture
+        Language        = $Language
         InstallerFile   = $installerFileName
         InstallerType   = "EXE"
         InstallArgs     = "/VERYSILENT /NORESTART"
+        UninstallCommand = "C:\Program Files\Audacity\unins000.exe"
         UninstallArgs   = "/VERYSILENT /NORESTART"
         RunningProcess  = @("Audacity")
         Detection       = @{
-            Type          = "File"
-            FilePath      = $detectionPath
-            FileName      = "Audacity.exe"
-            PropertyType  = "Version"
-            Operator      = "GreaterEquals"
-            ExpectedValue = $version
-            Is64Bit       = $true
+            Type      = "Compound"
+            Connector = "AND"  # Set to "And" or "Or"
+            Clauses   = @(
+                @{
+                    Type          = "File"
+                    FilePath      = $detectionPath
+                    FileName      = "Audacity.exe"
+                    PropertyType  = "Version"
+                    Operator      = "GreaterEquals"
+                    ExpectedValue = $version
+                    Is64Bit       = $true
+                },
+                @{
+                    Type                = "RegistryKey"
+                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($displayVersion)_$($Language)_$($Architecture)_01"
+                    Is64Bit             = $arpEntry.Is64Bit
+                }
+            )
         }
         IconFileName    = if($localIco -and (Test-Path -LiteralPath $localIco)) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
     }

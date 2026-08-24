@@ -1896,7 +1896,10 @@ function New-MECMApplicationFromManifest {
                                             -CollectionId $collection.CollectionId `
                                             -DeployAction Install `
                                             -DeployPurpose Available `
-                                            -AvailableDateTime (Get-Date) `
+                                            -UserNotification DisplayAll `
+                                            #-AvailableDateTime (Get-Date) `
+                                            -AvailableDateTime (Get-Date).AddDays(-1)  ` # Just Get-Date did not work, software was not shown because of time zone
+                                            #-TimeBaseOn LocalTime `
                                             -ErrorAction Stop | Out-Null
                                         Write-Log "Test deployment              : created"
                                     }

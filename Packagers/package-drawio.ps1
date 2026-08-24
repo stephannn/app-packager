@@ -85,8 +85,10 @@ if ($StageOnly -and $PackageOnly) {
 $GitHubApiUrl = "https://api.github.com/repos/jgraph/drawio-desktop/releases/latest"
 $DownloadIconUrl = "https://raw.githubusercontent.com/jgraph/drawio-desktop/6937156737666a80196217478766d11f8c1a71c7/build/96x96.png"
 
-$Publisher      = "JGraph"
-$AppName        = "draw.io"
+$Publisher    = "JGraph"
+$AppName      = "draw.io"
+$Language     = "MUI"
+$Architecture = "x64"
 
 $BaseDownloadRoot = Join-Path $DownloadRoot $AppName
 
@@ -212,7 +214,6 @@ function Invoke-StageDrawio {
     }
     else {
         Write-Log "Staged ICO exists. Skipping copy."
-
     }
 
     # --- Derive ARP detection from MSI properties ---
@@ -236,8 +237,8 @@ function Invoke-StageDrawio {
         DisplayName     = $AppName
         Publisher       = $Publisher
         SoftwareVersion = $productVersionRaw
-        Architecture    = "x64"
-        Language        = "MUI"
+        Architecture    = $Architecture
+        Language        = $Language
         InstallerFile   = $MsiFileName
         InstallerType   = "MSI"
         InstallArgs     = "/qn /norestart"
@@ -245,11 +246,22 @@ function Invoke-StageDrawio {
         ProductCode     = $productCode
         RunningProcess  = @()
         Detection       = @{
-            Type                = "RegistryKeyValue"
-            RegistryKeyRelative = $arpRegistryKey
-            ValueName           = "DisplayVersion"
-            ExpectedValue       = $productVersionRaw
-            Is64Bit             = $true
+            Type      = "Compound"
+            Connector = "AND"  # Set to "And" or "Or"
+            Clauses   = @(
+                @{
+                    Type                = "RegistryKeyValue"
+                    RegistryKeyRelative = $arpRegistryKey
+                    ValueName           = "DisplayVersion"
+                    ExpectedValue       = $productVersionRaw
+                    Is64Bit             = $true
+                },
+                @{
+                    Type                = "RegistryKey"
+                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($displayVersion)_$($Language)_$($Architecture)_01"
+                    Is64Bit             = $arpEntry.Is64Bit
+                }
+            )
         }
         IconFileName    = if($localIco -and (Test-Path -LiteralPath $localIco)) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
     }
@@ -312,7 +324,7 @@ function Invoke-PackageDrawio {
         -SkipStageManifestCopy
 
     $networkAppRoot = $publish.NetworkAppRoot
-    $networkContentPath = $publish.NetworkContentPath
+    #$networkContentPath = $publish.NetworkContentPath
     $manifest = $publish.Manifest
 
     Write-Log "Starting to create MECM application..."

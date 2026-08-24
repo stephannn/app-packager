@@ -87,6 +87,8 @@ $DownloadIconUrl = "https://github.com/usebruno/bruno/raw/main/assets/images/log
 
 $Publisher      = "Bruno Software Inc."
 $AppName        = "bruno"
+$Language     = "MUI"
+$Architecture = "x64"
 
 $BaseDownloadRoot = Join-Path $DownloadRoot $AppName
 
@@ -212,7 +214,6 @@ function Invoke-StageBruno {
     }
     else {
         Write-Log "Staged ICO exists. Skipping copy."
-
     }
 
     # --- Derive ARP detection from MSI properties ---
@@ -236,8 +237,8 @@ function Invoke-StageBruno {
         DisplayName     = $AppName
         Publisher       = $Publisher
         SoftwareVersion = $productVersionRaw
-        Architecture    = "x64"
-        Language        = "MUI"
+        Architecture    = $Architecture
+        Language        = $Language
         InstallerFile   = $MsiFileName
         InstallerType   = "MSI"
         InstallArgs     = "/qn /norestart"
@@ -245,11 +246,22 @@ function Invoke-StageBruno {
         ProductCode     = $productCode
         RunningProcess  = @()
         Detection       = @{
-            Type                = "RegistryKeyValue"
-            RegistryKeyRelative = $arpRegistryKey
-            ValueName           = "DisplayVersion"
-            ExpectedValue       = $productVersionRaw
-            Is64Bit             = $true
+            Type      = "Compound"
+            Connector = "AND"  # Set to "And" or "Or"
+            Clauses   = @(
+                @{
+                    Type                = "RegistryKeyValue"
+                    RegistryKeyRelative = $arpRegistryKey
+                    ValueName           = "DisplayVersion"
+                    ExpectedValue       = $productVersionRaw
+                    Is64Bit             = $true
+                },
+                @{
+                    Type                = "RegistryKey"
+                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($displayVersion)_$($Language)_$($Architecture)_01"
+                    Is64Bit             = $arpEntry.Is64Bit
+                }
+            )
         }
         IconFileName    = if($localIco -and (Test-Path -LiteralPath $localIco)) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
     }
