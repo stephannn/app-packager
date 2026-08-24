@@ -145,6 +145,8 @@ function Read-Preferences {
         ContentDistribution  = [pscustomobject]@{
             AutoDistribute = $false
             DPGroupName    = ''
+            DeployToTestCollection        = $false
+            TestCollectionName            = ''
         }
         AppNamePattern = '{Publisher} {AppName} - {SoftwareVersion}'
         Intune               = [pscustomobject]@{
@@ -263,6 +265,12 @@ function Read-Preferences {
             }
             if ($null -ne $cd.DPGroupName) {
                 $defaults.ContentDistribution.DPGroupName = [string]$cd.DPGroupName
+            }
+            if ($null -ne $cd.DeployToTestCollection) {
+                try { $defaults.ContentDistribution.DeployToTestCollection = [bool]$cd.DeployToTestCollection } catch { }
+            }
+            if ($null -ne $cd.TestCollectionName) {
+                $defaults.ContentDistribution.TestCollectionName = [string]$cd.TestCollectionName
             }
         }
         if ($null -ne $data.Intune -and $null -ne $data.Intune.CreateIntuneWin) {
@@ -2727,6 +2735,8 @@ function New-MecmPreferencesPanel {
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
     <Grid.ColumnDefinitions>
         <ColumnDefinition Width="170"/>
@@ -2766,29 +2776,35 @@ function New-MecmPreferencesPanel {
     <TextBlock Grid.Row="8" Grid.Column="0" Text="DP Group:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Exact name of the Distribution Point Group to target."/>
     <TextBox   Grid.Row="8" Grid.Column="1" x:Name="txtDPGroup" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Distribution Point Group display name (e.g. 'All DPs')"/>
 
-    <TextBlock Grid.Row="9" Grid.Column="0" Text="App Name Pattern:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Pattern for generating the MECM application name."/>
-    <TextBox   Grid.Row="9" Grid.Column="1" x:Name="txtANP" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Pattern for generating the MECM application name"/>
+    <TextBlock Grid.Row="9" Grid.Column="0" Text="Test deployment:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Requires Auto-distribute enabled and a DP Group name. After content distribution, deploys the application (Available, immediately, default options) to the test collection."/>
+    <CheckBox  Grid.Row="9" Grid.Column="1" x:Name="chkTestDeploy" Content="Deploy to test collection after distribution" FontSize="13" VerticalAlignment="Center" Margin="0,0,0,8" Controls:ControlsHelper.ContentCharacterCasing="Normal"/>
 
-    <TextBlock Grid.Row="10" Grid.Column="0" Text="PSAppDeployToolkit:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Path of the PSAppDeployToolkit for distribution."/>
-    <TextBox   Grid.Row="10" Grid.Column="1" x:Name="txtPSADT" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Path to the PSAppDeployToolkit"/>
+    <TextBlock Grid.Row="10" Grid.Column="0" Text="Test collection:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Exact device collection name that receives the Available test deployment."/>
+    <TextBox   Grid.Row="10" Grid.Column="1" x:Name="txtTestCollection" FontSize="13" MaxLength="255" Margin="0,0,0,8" ToolTip="Device collection display name (e.g. 'App Test Devices')"/>
 
-    <TextBlock Grid.Row="11" Grid.Column="0" Text="MECM Application Folder:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Path to the MECM application folder."/>
-    <TextBox   Grid.Row="11" Grid.Column="1" x:Name="txtMCMAppFolder" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Path to the MECM application folder"/>
+    <TextBlock Grid.Row="11" Grid.Column="0" Text="App Name Pattern:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Pattern for generating the MECM application name."/>
+    <TextBox   Grid.Row="11" Grid.Column="1" x:Name="txtANP" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Pattern for generating the MECM application name"/>
 
-    <TextBlock Grid.Row="12" Grid.Column="0" Text="Console:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,6,0,0" ToolTip="Configuration Manager Console (AdminUI) detection status. Checked once per launch."/>
-    <TextBlock Grid.Row="12" Grid.Column="1" x:Name="txtConsoleStatus" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,6,0,0"/>
+    <TextBlock Grid.Row="12" Grid.Column="0" Text="PSAppDeployToolkit:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Path of the PSAppDeployToolkit for distribution."/>
+    <TextBox   Grid.Row="12" Grid.Column="1" x:Name="txtPSADT" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Path to the PSAppDeployToolkit"/>
 
-    <TextBlock Grid.Row="13" Grid.Column="0" Text="7-Zip CLI:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,6,0,0" ToolTip="7-Zip command-line (7z.exe) detection status. Required by Adobe Reader + TeamViewer Host packagers."/>
-    <TextBlock Grid.Row="13" Grid.Column="1" x:Name="txtSevenZipStatus" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,6,0,0"/>
+    <TextBlock Grid.Row="13" Grid.Column="0" Text="MECM Application Folder:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,0,8" ToolTip="Path to the MECM application folder."/>
+    <TextBox   Grid.Row="13" Grid.Column="1" x:Name="txtMCMAppFolder" FontSize="13" MaxLength="200" Margin="0,0,0,8" ToolTip="Path to the MECM application folder"/>
 
-    <TextBlock Grid.Row="14" Grid.Column="0" Text="Content Prep:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,6,0,0" ToolTip="Microsoft Win32 Content Prep Tool (IntuneWinAppUtil.exe) detection status. Downloaded on first use, or place the exe on PATH."/>
-    <StackPanel Grid.Row="14" Grid.Column="1" Orientation="Horizontal" Margin="0,6,0,0">
+    <TextBlock Grid.Row="14" Grid.Column="0" Text="Console:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,6,0,0" ToolTip="Configuration Manager Console (AdminUI) detection status. Checked once per launch."/>
+    <TextBlock Grid.Row="14" Grid.Column="1" x:Name="txtConsoleStatus" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,6,0,0"/>
+
+    <TextBlock Grid.Row="15" Grid.Column="0" Text="7-Zip CLI:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,6,0,0" ToolTip="7-Zip command-line (7z.exe) detection status. Required by Adobe Reader + TeamViewer Host packagers."/>
+    <TextBlock Grid.Row="15" Grid.Column="1" x:Name="txtSevenZipStatus" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,6,0,0"/>
+
+    <TextBlock Grid.Row="16" Grid.Column="0" Text="Content Prep:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,6,0,0" ToolTip="Microsoft Win32 Content Prep Tool (IntuneWinAppUtil.exe) detection status. Downloaded on first use, or place the exe on PATH."/>
+    <StackPanel Grid.Row="16" Grid.Column="1" Orientation="Horizontal" Margin="0,6,0,0">
         <TextBlock x:Name="txtIntuneWinStatus" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center"/>
         <Button x:Name="btnIntuneWinDownload" Content="Download" FontSize="11" Margin="10,0,0,0" Padding="10,2" Visibility="Collapsed"/>
     </StackPanel>
 
-    <TextBlock Grid.Row="15" Grid.Column="0" Text="Intunewin:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,6,0,0" ToolTip="When enabled, a successful Package also produces an .intunewin from the staged content and stores it beside the network content version folder."/>
-    <CheckBox  Grid.Row="15" Grid.Column="1" x:Name="chkIntuneWin" Content="Create .intunewin during Package" FontSize="13" VerticalAlignment="Center" Margin="0,6,0,0" Controls:ControlsHelper.ContentCharacterCasing="Normal"/>
+    <TextBlock Grid.Row="17" Grid.Column="0" Text="Intunewin:" FontSize="13" FontWeight="Bold" VerticalAlignment="Center" Margin="0,6,0,0" ToolTip="When enabled, a successful Package also produces an .intunewin from the staged content and stores it beside the network content version folder."/>
+    <CheckBox  Grid.Row="17" Grid.Column="1" x:Name="chkIntuneWin" Content="Create .intunewin during Package" FontSize="13" VerticalAlignment="Center" Margin="0,6,0,0" Controls:ControlsHelper.ContentCharacterCasing="Normal"/>
 </Grid>
 '@
 
@@ -2803,10 +2819,12 @@ function New-MecmPreferencesPanel {
     $txtDL  = $element.FindName('txtDL')
     $txtEst = $element.FindName('txtEst')
     $txtMax = $element.FindName('txtMax')
-    $chkAutoDist = $element.FindName('chkAutoDist')
-    $txtDPGroup  = $element.FindName('txtDPGroup')
-    $txtANP      = $element.FindName('txtANP')
-    $txtPSADT    = $element.FindName('txtPSADT')
+    $chkAutoDist       = $element.FindName('chkAutoDist')
+    $txtDPGroup        = $element.FindName('txtDPGroup')
+    $chkTestDeploy     = $element.FindName('chkTestDeploy')
+    $txtTestCollection = $element.FindName('txtTestCollection')
+    $txtANP            = $element.FindName('txtANP')
+    $txtPSADT          = $element.FindName('txtPSADT')
     $txtMCMAppFolder   = $element.FindName('txtMCMAppFolder')
     $txtConsoleStatus  = $element.FindName('txtConsoleStatus')
     $txtSevenZipStatus = $element.FindName('txtSevenZipStatus')
@@ -2814,18 +2832,20 @@ function New-MecmPreferencesPanel {
     $btnIntuneWinDownload = $element.FindName('btnIntuneWinDownload')
     $chkIntuneWin         = $element.FindName('chkIntuneWin')
 
-    $txtSC.Text             = [string]$script:Prefs.SiteCode
-    $txtProvider.Text       = [string]$script:Prefs.ProviderMachineName
-    $txtFS.Text             = [string]$script:Prefs.FileShareRoot
-    $txtASP.Text            = [string]$script:Prefs.ApplicationSharePattern
-    $txtDL.Text             = [string]$script:Prefs.DownloadRoot
-    $txtEst.Text            = [string]$script:Prefs.EstimatedRuntimeMins
-    $txtMax.Text            = [string]$script:Prefs.MaximumRuntimeMins
-    $chkAutoDist.IsChecked  = [bool]$script:Prefs.ContentDistribution.AutoDistribute
-    $txtANP.Text            = [string]$script:Prefs.AppNamePattern
-    $txtDPGroup.Text        = [string]$script:Prefs.ContentDistribution.DPGroupName
-    $txtPSADT.Text          = [string]$script:Prefs.PSAppDeployToolkitPath
-    $txtMCMAppFolder.Text   = [string]$script:Prefs.MECMApplicationFolder
+    $txtSC.Text              = [string]$script:Prefs.SiteCode
+    $txtProvider.Text        = [string]$script:Prefs.ProviderMachineName
+    $txtFS.Text              = [string]$script:Prefs.FileShareRoot
+    $txtASP.Text             = [string]$script:Prefs.ApplicationSharePattern
+    $txtDL.Text              = [string]$script:Prefs.DownloadRoot
+    $txtEst.Text             = [string]$script:Prefs.EstimatedRuntimeMins
+    $txtMax.Text             = [string]$script:Prefs.MaximumRuntimeMins
+    $txtANP.Text             = [string]$script:Prefs.AppNamePattern
+    $chkAutoDist.IsChecked = [bool]$script:Prefs.ContentDistribution.AutoDistribute
+    $txtDPGroup.Text       = [string]$script:Prefs.ContentDistribution.DPGroupName
+    $chkTestDeploy.IsChecked     = [bool]$script:Prefs.ContentDistribution.DeployToTestCollection
+    $txtTestCollection.Text      = [string]$script:Prefs.ContentDistribution.TestCollectionName
+    $txtPSADT.Text           = [string]$script:Prefs.PSAppDeployToolkitPath
+    $txtMCMAppFolder.Text    = [string]$script:Prefs.MECMApplicationFolder
 
     $cm = $script:Prefs.DetectedTools.ConfigMgrConsole
     if ($cm -and $cm.Found) {
@@ -2900,6 +2920,8 @@ function New-MecmPreferencesPanel {
         $prefsRef.MaximumRuntimeMins        = $maxVal
         $prefsRef.ContentDistribution.AutoDistribute = [bool]$chkAutoDist.IsChecked
         $prefsRef.ContentDistribution.DPGroupName    = $txtDPGroup.Text.Trim()
+        $prefsRef.ContentDistribution.DeployToTestCollection        = [bool]$chkTestDeploy.IsChecked
+        $prefsRef.ContentDistribution.TestCollectionName            = $txtTestCollection.Text.Trim()
         $prefsRef.PSAppDeployToolkitPath             = $txtPSADT.Text.Trim()
         $prefsRef.MECMApplicationFolder              = $txtMCMAppFolder.Text.Trim()
         $prefsRef.Intune.CreateIntuneWin = [bool]$chkIntuneWin.IsChecked
