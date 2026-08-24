@@ -1,4 +1,4 @@
-﻿<#
+<#
 Vendor: Audacity Team
 App: Audacity
 CMName: Audacity
@@ -54,16 +54,19 @@ DownloadPageUrl: https://www.audacityteam.org/download/
     - PowerShell 5.1
     - ConfigMgr Admin Console installed
     - RBAC permissions to create Applications and Deployment Types
+    - Local administrator
     - Write access to FileServerPath
 #>
 
 param(
     [string]$SiteCode = "MCM",
+    [string]$MECMApplicationFolder = "",
     [string]$Comment = "",
     [string]$FileServerPath = "\\fileserver\sccm$",
-    [ValidateSet('Nested','Flat')]
-    [string]$ContentLayout = "Nested",
+    [string]$ApplicationSharePattern = "Applications\{ProductName}\{Version}",
+    [string]$AppNamePattern = "{AppName} - {SoftwareVersion}",
     [string]$DownloadRoot = "C:\temp\ap",
+    [String]$PSAppDeployToolkitPath = "",
     [int]$EstimatedRuntimeMins = 15,
     [int]$MaximumRuntimeMins = 30,
     [string]$LogPath,
@@ -84,11 +87,12 @@ if ($StageOnly -and $PackageOnly) {
 
 # --- Configuration ---
 $GitHubApiUrl = "https://api.github.com/repos/audacity/audacity/releases/latest"
+$DownloadIconUrl = "https://raw.githubusercontent.com/audacity/audacity/refs/heads/master/share/icons/AppIcon/AU4_AppIcon_96x96.png"
 
-$VendorFolder = "Audacity Team"
-$AppFolder    = "Audacity"
+$Publisher = "Audacity Team"
+$AppName    = "Audacity"
 
-$BaseDownloadRoot = Join-Path $DownloadRoot "Audacity"
+$BaseDownloadRoot = Join-Path $DownloadRoot $AppName
 
 # --- Functions ---
 
@@ -99,8 +103,10 @@ function Get-LatestAudacityRelease {
     Write-Log "GitHub releases API          : $GitHubApiUrl" -Quiet:$Quiet
 
     try {
-        $json = (curl.exe -L --fail --silent --show-error $GitHubApiUrl) -join ''
-        if ($LASTEXITCODE -ne 0) { throw "Failed to query GitHub releases API." }
+        $json = Get-PageContentWithFallback -Url $GitHubApiUrl -Quiet:$Quiet
+        if ([string]::IsNullOrWhiteSpace($json)) {
+            throw "Could not retrieve $GitHubApiUrl using either Invoke-WebRequest or curl.exe."
+        }
 
         $release = ConvertFrom-Json $json
         # Audacity tags use Audacity- prefix, not v
@@ -129,14 +135,14 @@ function Get-LatestAudacityRelease {
 function Invoke-StageAudacity {
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "Audacity (x64) - STAGE phase"
+    Write-Log "$AppName - STAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 
     Initialize-Folder -Path $BaseDownloadRoot
 
     $releaseInfo = Get-LatestAudacityRelease
-    if (-not $releaseInfo) { throw "Could not resolve Audacity version." }
+    if (-not $releaseInfo) { throw "Could not resolve $AppName version." }
 
     $version           = $releaseInfo.Version
     $installerFileName = $releaseInfo.FileName
@@ -159,6 +165,21 @@ function Invoke-StageAudacity {
         Write-Log "Local installer exists. Skipping download."
     }
 
+    if($DownloadIconUrl){
+        Write-Log "Downloading ICO..."
+        try {
+            $localIco = ([IO.Path]::Combine($BaseDownloadRoot, $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl))))
+            Invoke-DownloadWithRetry -Url $DownloadIconUrl -OutFile $localIco
+        }
+        catch {
+            Write-Log "Failed to download ICO: $($_.Exception.Message)" -Level WARN
+            $localIco = ""
+        }
+    }
+
+    Write-Log ""
+    Write-Log "PSAppDeployToolkitPath: $PSAppDeployToolkitPath"
+
     # --- Versioned local content folder ---
     $localContentPath = Join-Path $BaseDownloadRoot $version
     Initialize-Folder -Path $localContentPath
@@ -171,6 +192,14 @@ function Invoke-StageAudacity {
     else {
         Write-Log "Staged EXE exists. Skipping copy."
     }
+    if(-not (Test-Path -LiteralPath (Join-Path $localContentPath ([System.IO.Path]::GetFileName($localIco))))) {
+        Copy-Item -LiteralPath $localIco -Destination (Join-Path $localContentPath ([System.IO.Path]::GetFileName($localIco))) -Force -ErrorAction Stop
+        Write-Log "Copied ICO to staged folder  : $localContentPath"
+    }
+    else {
+        Write-Log "Staged ICO exists. Skipping copy."
+
+    }
 
     # --- Generate content wrappers ---
     $wrapperContent = New-ExeWrapperContent `
@@ -179,15 +208,15 @@ function Invoke-StageAudacity {
         -UninstallCommand 'C:\Program Files\Audacity\unins000.exe' `
         -UninstallArgs "'/VERYSILENT', '/NORESTART'"
 
-    Write-ContentWrappers -OutputPath $localContentPath `
-        -InstallPs1Content $wrapperContent.Install `
-        -UninstallPs1Content $wrapperContent.Uninstall
+    if([string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $true -or (Test-Path -LiteralPath $PSAppDeployToolkitPath) -eq $false) {
+        # --- Generate content wrappers ---
+        Write-ContentWrappers -OutputPath $localContentPath `
+            -InstallPs1Content $wrapperContent.Install `
+            -UninstallPs1Content $wrapperContent.Uninstall
+    }
 
     # --- Write stage manifest ---
     $detectionPath = "{0}\Audacity" -f $env:ProgramFiles
-
-    $appName   = "Audacity $version"
-    $publisher = "Audacity Team"
 
     Write-Log "Detection path               : $detectionPath"
     Write-Log "Detection file               : Audacity.exe"
@@ -195,9 +224,12 @@ function Invoke-StageAudacity {
 
     $manifestPath = Join-Path $localContentPath "stage-manifest.json"
     Write-StageManifest -Path $manifestPath -ManifestData @{
-        AppName         = $appName
-        Publisher       = $publisher
+        AppName         = $AppName
+        DisplayName     = $AppName
+        Publisher       = $Publisher
         SoftwareVersion = $version
+        Architecture    = "x64"
+        Language        = "MUI"
         InstallerFile   = $installerFileName
         InstallerType   = "EXE"
         InstallArgs     = "/VERYSILENT /NORESTART"
@@ -212,6 +244,7 @@ function Invoke-StageAudacity {
             ExpectedValue = $version
             Is64Bit       = $true
         }
+        IconFileName    = if($localIco -and (Test-Path -LiteralPath $localIco)) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
     }
 
     Set-Content -LiteralPath (Join-Path $BaseDownloadRoot "staged-version.txt") -Value $version -Encoding ASCII -ErrorAction Stop
@@ -230,7 +263,7 @@ function Invoke-StageAudacity {
 function Invoke-PackageAudacity {
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "Audacity (x64) - PACKAGE phase"
+    Write-Log "$AppName - PACKAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 
@@ -258,29 +291,29 @@ function Invoke-PackageAudacity {
         throw "Network root path not accessible: $FileServerPath"
     }
 
-    $networkContentPath = Get-NetworkContentPath -FileServerPath $FileServerPath -VendorFolder $VendorFolder -AppFolder $AppFolder -Version $manifest.SoftwareVersion -Layout $ContentLayout
+    $publish = Publish-StagedContentToNetwork `
+        -FileServerPath $FileServerPath `
+        -PathPattern $ApplicationSharePattern `
+        -Manifest $manifest `
+        -LocalContentPath $localContentPath `
+        -ManifestPath $manifestPath `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
+        -SkipStageManifestCopy
 
-    Write-Log "Network content path         : $networkContentPath"
-    Write-Log ""
+    $networkAppRoot = $publish.NetworkAppRoot
+    #$networkContentPath = $publish.NetworkContentPath
+    $manifest = $publish.Manifest
 
-    $localFiles = Get-ChildItem -Path $localContentPath -File -ErrorAction Stop
-    foreach ($f in $localFiles) {
-        if ($f.Name -eq "stage-manifest.json") { continue }
-        $dest = Join-Path $networkContentPath $f.Name
-        if (-not (Test-Path -LiteralPath $dest)) {
-            Copy-Item -LiteralPath $f.FullName -Destination $dest -Force -ErrorAction Stop
-            Write-Log "Copied to network            : $($f.Name)"
-        }
-        else {
-            Write-Log "Already on network           : $($f.Name)"
-        }
-    }
-
+    Write-Log "Starting to create MECM application..."
+    # --- MECM application ---
     New-MECMApplicationFromManifest `
         -Manifest $manifest `
+        -AppNamePattern $AppNamePattern `
         -SiteCode $SiteCode `
+        -MCMAppFolder $MECMApplicationFolder `
         -Comment $Comment `
-        -NetworkContentPath $networkContentPath `
+        -NetworkContentPath $networkAppRoot `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
         -EstimatedRuntimeMins $EstimatedRuntimeMins `
         -MaximumRuntimeMins $MaximumRuntimeMins
 }
@@ -306,7 +339,7 @@ try {
 
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "Audacity (x64) Auto-Packager starting"
+    Write-Log "$AppName Auto-Packager starting"
     Write-Log ("=" * 60)
     Write-Log ""
     Write-Log ("RunAsUser                    : {0}\{1}" -f $env:USERDOMAIN,$env:USERNAME)

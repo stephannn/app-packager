@@ -141,7 +141,7 @@ function Invoke-StageBruno {
     Initialize-Folder -Path $BaseDownloadRoot
 
     $releaseInfo = Get-LatestBrunoRelease
-    if (-not $releaseInfo) { throw "Could not resolve Bruno version." }
+    if (-not $releaseInfo) { throw "Could not resolve $AppName version." }
 
     $version      = $releaseInfo.Version
     $MsiFileName  = $releaseInfo.FileName

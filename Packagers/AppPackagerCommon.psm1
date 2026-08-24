@@ -1859,8 +1859,14 @@ function New-MECMApplicationFromManifest {
                         $dpGroup = [string]$cd.DPGroupName
                         Write-Log "Distributing content         : DP group '$dpGroup'"
                         try {
-                            Start-CMContentDistribution -ApplicationName $appName -DistributionPointGroupName $dpGroup -ErrorAction Stop
-                            Write-Log "Content distribution         : initiated"
+                            $dpGroup.Trim().Split(";") | ForEach-Object {
+                                $dpTmp = Get-CMDistributionPointGroup -Name $_ -ErrorAction SilentlyContinue
+                                if([bool]($dpTmp)) {
+                                    $AppObj = Get-CMApplication -Name $cmAppName
+                                    Start-CMContentDistribution -ApplicationId $AppObj.CI_ID -DistributionPointGroupName $dpTmp.Name -ErrorAction Stop
+                                    Write-Log "Content distribution         : initiated"
+                                }
+                            }
                         } catch {
                             # "already been targeted" is the canonical pattern for a DP group that already holds this app
                             if ($_.Exception.Message -match 'already been targeted|already distributed') {
