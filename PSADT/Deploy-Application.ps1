@@ -199,7 +199,7 @@ Try {
 		}
 		$processNames = $processNames | ForEach-Object { "$($_)".Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 		if ($processNames.Count -gt 0) {
-			$processRunning = (Get-Process -Name $processNames -ErrorAction SilentlyContinue)
+			$processRunning = (Get-Process | Where-Object { $process = $_; ($processNames | ForEach-Object { $process.ProcessName -like "*$_*" } | Where-Object { $_ }) -or ($processNames | ForEach-Object { $process.MainWindowTitle -like "*$_*" } | Where-Object { $_ }) } )
 		}
 	}
 	
@@ -298,6 +298,9 @@ Try {
 		Set-RegistryKey -Key $CustomRegKey -Name 'Language'        	-Type 'String' -Value $App.Lang
 		Set-RegistryKey -Key $CustomRegKey -Name 'Architecture'    	-Type 'String' -Value $App.Arch
 		
+		## Remove Desktop shortcut
+		Remove-File -Path "$envCommonDesktop\$($App.Name)*.lnk" -ContinueOnError $true
+		
 		## If block execution variable is true, call the function to unblock execution
 	    If ($BlockExecution) { Unblock-AppExecution }
 		
@@ -350,7 +353,12 @@ Try {
 					$installerPath = $command.Source
 				}
 				else {
-					$installerPath = Join-Path -Path $dirFiles -ChildPath $App.UninstallFile
+					if ([System.IO.Path]::IsPathRooted($App.UninstallFile)) {
+						$installerPath = $App.UninstallFile
+					}
+					else {
+						$installerPath = Join-Path -Path $dirFiles -ChildPath $App.UninstallFile
+					}
 				}
 
 				if (-not (Test-Path -LiteralPath $installerPath)) {
