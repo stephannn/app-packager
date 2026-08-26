@@ -191,6 +191,7 @@ Try {
 	
 	if($App.Processes){
 		[array]$processNames = @()
+		[array]$excludeProcessNames = @("cmtrace")
 		if ($App.Processes -is [array]) {
 			$processNames = $App.Processes
 		}
@@ -199,7 +200,7 @@ Try {
 		}
 		$processNames = $processNames | ForEach-Object { "$($_)".Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 		if ($processNames.Count -gt 0) {
-			$processRunning = (Get-Process | Where-Object { $process = $_; ($processNames | ForEach-Object { $process.ProcessName -like "*$_*" } | Where-Object { $_ }) -or ($processNames | ForEach-Object { $process.MainWindowTitle -like "*$_*" } | Where-Object { $_ }) } )
+			$processRunning = (Get-Process | Where-Object { $process = $_; (($processNames | ForEach-Object { $process.ProcessName -like "*$_*" } | Where-Object { $_ }) -or ($processNames | ForEach-Object { $process.MainWindowTitle -like "*$_*" } | Where-Object { $_ })) -and ($process.ProcessName -notin $excludeProcessNames ) })
 		}
 	}
 	
