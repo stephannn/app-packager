@@ -73,13 +73,17 @@ Try {
 		If (Test-Path -LiteralPath 'variable:HostInvocation') { $script:ExitCode = $mainExitCode; Exit } Else { Exit $mainExitCode }
 	}
 	
+	[string]$appVendor 			= $JsonConfig.Publisher
+	[string]$appName 			= $JsonConfig.AppName
+	[string]$appVersion 		= $JsonConfig.SoftwareVersion
+	[string]$appArch 			= $JsonConfig.Architecture
+	[string]$appLang 			= $JsonConfig.Language
+	[string]$appRevision 		= $JsonConfig.Revision
+	[string]$appScriptVersion 	= '1.0.1'
+	[string]$appScriptDate 		= '20/04/2026'
+	[string]$appScriptAuthor 	= 'SH'
+	
 	$App = [PSCustomObject]@{
-		Vendor          = $JsonConfig.Publisher
-		Name            = $JsonConfig.AppName
-		Version         = $JsonConfig.SoftwareVersion
-		Arch            = $JsonConfig.Architecture
-		Lang            = $JsonConfig.Language
-		Revision        = $JsonConfig.Revision
 		InstallerFile   = $JsonConfig.InstallerFile
 		InstallerType   = $JsonConfig.InstallerType
 		InstallArgs     = $JsonConfig.InstallArgs
@@ -89,17 +93,17 @@ Try {
 		Processes       = $JsonConfig.RunningProcess
 		Detection       = $JsonConfig.Detection
 	}
+	
+	if ([string]::IsNullOrWhiteSpace($appArch)) { $appArch = 'x64' }
+	if ([string]::IsNullOrWhiteSpace($appLang )) { $appLang  = 'MUI' }
+	if ([string]::IsNullOrWhiteSpace($appRevision)) { $appRevision = '01' }
 
-	if ([string]::IsNullOrWhiteSpace($App.Arch)) { $App.Arch = 'x64' }
-	if ([string]::IsNullOrWhiteSpace($App.Lang)) { $App.Lang = 'MUI' }
-	if ([string]::IsNullOrWhiteSpace($App.Revision)) { $App.Revision = '01' }
-
-	[string]$appNameWithoutVersion = $App.Name
-	if (-not [string]::IsNullOrWhiteSpace($App.Version)) {
-		$appNameWithoutVersion = ($App.Name-replace [regex]::Escape($App.Version), "").Trim()
+	[string]$appNameWithoutVersion = $appName
+	if (-not [string]::IsNullOrWhiteSpace($appVersion)) {
+		$appNameWithoutVersion = ($appName -replace [regex]::Escape($appVersion), "").Trim()
 	}
 	if ([string]::IsNullOrWhiteSpace($appNameWithoutVersion)) {
-		$appNameWithoutVersion = $App.Name
+		$appNameWithoutVersion = $appName
 	}
 	[string]$appNameMsg = $appNameWithoutVersion
 	[string]$dirFiles = Join-Path -Path $scriptpath -ChildPath 'Files'
@@ -113,14 +117,11 @@ Try {
 	}
 	
 	## Package Name
-    [String]$PackageName = $App.Vendor + "_" + $appNameWithoutVersion + "_" + $App.Version + "_" + $App.Lang + "_" + $App.Arch + "_" + $App.Revision
+    [String]$PackageName = $appVendor + "_" + $appNameWithoutVersion + "_" + $appVersion + "_" + $appLang + "_" + $appArch + "_" + $appRevision
 
 	## Custom Registry Entry
 	[String]$CustomRegKey = 'HKLM:\SOFTWARE\SCCM\' + $PackageName
 	
-	[string]$appScriptVersion = '1.4.0'
-	[string]$appScriptDate = '20/04/2026'
-	[string]$appScriptAuthor = 'SH'
 	##*===============================================
 	
 	##* Do not modify section below
@@ -216,7 +217,7 @@ Try {
 		if($processRunning){
 			Show-InstallationWelcome -CloseApps (Select-ProcessName -processRunning $processRunning) -AllowDefer -DeferTimes 3 -MinimizeWindows $false -BlockExecution
 			# Show Progress Message (with the default message)
-			Show-InstallationProgress -StatusMessage "Installing $appNameWithoutVersion $($App.Version)" -TopMost $false
+			Show-InstallationProgress -StatusMessage "Installing $appNameWithoutVersion $($appVersion)" -TopMost $false
 		}
 
 	    # Remove any previous versions if explicit uninstall commands are provided in manifest
@@ -276,7 +277,7 @@ Try {
 					Write-Log -Message "Found $($App.InstallerFile), now attempting to install."
 					Execute-Process -Path $installerPath
 				} else {
-					Write-Log -Message "Found $($App.InstallerFile), now attempting to install $($App.Name) with arguments $($App.InstallArgs)."
+					Write-Log -Message "Found $($App.InstallerFile), now attempting to install $($appName) with arguments $($App.InstallArgs)."
 					Execute-Process -Path $installerPath -Parameters "$($App.InstallArgs)"
 				}
 			}
@@ -293,14 +294,15 @@ Try {
 		## Set custom registry keys
 		Set-RegistryKey -Key $CustomRegKey -Name 'Installed'       	-Type 'String' -Value 'True'
 		Set-RegistryKey -Key $CustomRegKey -Name 'Date'            	-Type 'String' -Value (Get-Date -Format g)
-		Set-RegistryKey -Key $CustomRegKey -Name 'Vendor'      		-Type 'String' -Value $App.Vendor
-		Set-RegistryKey -Key $CustomRegKey -Name 'ApplicationName'  -Type 'String' -Value $App.Name
-		Set-RegistryKey -Key $CustomRegKey -Name 'Version'         	-Type 'String' -Value $App.Version
-		Set-RegistryKey -Key $CustomRegKey -Name 'Language'        	-Type 'String' -Value $App.Lang
-		Set-RegistryKey -Key $CustomRegKey -Name 'Architecture'    	-Type 'String' -Value $App.Arch
+		Set-RegistryKey -Key $CustomRegKey -Name 'Vendor'      		-Type 'String' -Value $appVendor
+		Set-RegistryKey -Key $CustomRegKey -Name 'ApplicationName'  -Type 'String' -Value $appName
+		Set-RegistryKey -Key $CustomRegKey -Name 'Version'         	-Type 'String' -Value $appVersion
+		Set-RegistryKey -Key $CustomRegKey -Name 'Architecture'    	-Type 'String' -Value $appArch
+		Set-RegistryKey -Key $CustomRegKey -Name 'Language'        	-Type 'String' -Value $appLang 
+		Set-RegistryKey -Key $CustomRegKey -Name 'Revision'    		-Type 'String' -Value $appRevision
 		
 		## Remove Desktop shortcut
-		Remove-File -Path "$envCommonDesktop\$($App.Name)*.lnk" -ContinueOnError $true
+		Remove-File -Path "$envCommonDesktop\$($appName)*.lnk" -ContinueOnError $true
 		
 		## If block execution variable is true, call the function to unblock execution
 	    If ($BlockExecution) { Unblock-AppExecution }
@@ -325,7 +327,7 @@ Try {
 		## Prompt the user to close the following applications if they are running:
 		if($processRunning){
 			Show-InstallationWelcome -CloseApps (Select-ProcessName -processRunning $processRunning) -AllowDefer -DeferTimes 3 -MinimizeWindows $false -BlockExecution
-			Show-InstallationProgress -StatusMessage "Uninstalling $appNameMsg $($App.Version)" -TopMost $false
+			Show-InstallationProgress -StatusMessage "Uninstalling $appNameMsg $($appVersion)" -TopMost $false
 		}
 		
 		## Show Progress Message (with a message to indicate the application is being uninstalled)
@@ -370,7 +372,7 @@ Try {
 					Write-Log -Message "Found $($App.UninstallFile), now attempting to uninstall."
 					Execute-Process -Path $installerPath
 				} else {
-					Write-Log -Message "Found $($App.UninstallFile), now attempting to uninstall $($App.Name) with arguments $($App.UninstallArgs)."
+					Write-Log -Message "Found $($App.UninstallFile), now attempting to uninstall $($appName) with arguments $($App.UninstallArgs)."
 					Execute-Process -Path $installerPath -Parameters "$($App.UninstallArgs)"
 				}
 			}
