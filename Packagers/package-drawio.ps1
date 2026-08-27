@@ -258,7 +258,7 @@ function Invoke-StageDrawio {
                 },
                 @{
                     Type                = "RegistryKey"
-                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($displayVersion)_$($Language)_$($Architecture)_01"
+                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($productVersionRaw)_$($Language)_$($Architecture)_01"
                     Is64Bit             = $arpEntry.Is64Bit
                 }
             )
