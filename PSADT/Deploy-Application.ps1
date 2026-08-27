@@ -227,20 +227,24 @@ Try {
 
 			$prod = $_.ProductCode
 			
-			if ($prod -eq "") {
-			    ## some installer e.g. WEB-Installer
+			if ($prod -match '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$') {
+				if([bool](Get-CimInstance -Query "Select IdentifyingNumber FROM Win32_Product where IdentifyingNumber LIKE '%$prod%'")){
+					## MSI Installation!
+					Write-Log -Message "start MSI Uninstall $($prod)" -LogType 'CMTrace'
+					Execute-MSI -Action 'Uninstall' -Path $prod -Parameters "/qn" -ContinueOnError $True
+					Write-Log -Message "$appNameWithoutVersion has been removed" -LogType 'CMTrace'
+				} else {
+					Write-Log -Message "$prod not a valid MSI Code" -LogType 'CMTrace'
+				}
+			}
+			else {
+				## some installer e.g. WEB-Installer
 				$unstr = $_.UninstallString + " --force-uninstall"
 				$unstring = $unstr.split('"')
 				Write-Log -Message "start Uninstall $($unString[1]) $($unString[2])" -LogType 'CMTrace' 
 				#Execute-Process -Path $unString[1] -Parameters $unString[2] -ContinueOnError $True
-				$erg = start-process $unString[1] -arg $unString[2] -Wait
+				$erg = Start-Process $unString[1] -arg $unString[2] -Wait
 				Write-Log -Message "$appNameWithoutVersion has been removed with" -LogType 'CMTrace'
-			}
-			else {
-			    ## MSI Installation!
-				Write-Log -Message "start MSI Uninstall $($prod)" -LogType 'CMTrace'
-				Execute-MSI -Action 'Uninstall' -Path $prod -Parameters "/qn" -ContinueOnError $True
-				Write-Log -Message "$appNameWithoutVersion has been removed" -LogType 'CMTrace'
 			}
 		}
 				
@@ -365,43 +369,49 @@ Try {
 				}
 
 				if (-not (Test-Path -LiteralPath $installerPath)) {
-					throw "Uninstaller file not found: $installerPath"
-				}
-
-				if([string]::IsNullOrEmpty($App.UninstallArgs)){
-					Write-Log -Message "Found $($App.UninstallFile), now attempting to uninstall."
-					Execute-Process -Path $installerPath
+					Write-Log "Uninstaller file not found: $installerPath"
 				} else {
-					Write-Log -Message "Found $($App.UninstallFile), now attempting to uninstall $($appName) with arguments $($App.UninstallArgs)."
-					Execute-Process -Path $installerPath -Parameters "$($App.UninstallArgs)"
+					if([string]::IsNullOrEmpty($App.UninstallArgs)){
+						Write-Log -Message "Found $($App.UninstallFile), now attempting to uninstall."
+						#Execute-Process -Path $installerPath
+						Start-Process $installerPath -Wait
+					} else {
+						Write-Log -Message "Found $($App.UninstallFile), now attempting to uninstall $($appName) with arguments $($App.UninstallArgs)."
+						#Execute-Process -Path $installerPath -Parameters "$($App.UninstallArgs)"
+						Start-Process $installerPath -ArgumentList "$($App.UninstallArgs)" -Wait
+					}
 				}
 			}
 		}
 
+		Write-Log -Message "Remove MSI Application"
 		Remove-MSIApplications -Name $appNameWithoutVersion -Wildcard -ContinueOnError $true
 
 		Get-InstalledApplication -name "*$($appNameWithoutVersion)*" -WildCard | ForEach-Object { 
 
 			$prod = $_.ProductCode
 			
-			if ($prod -eq "") {
-			    ## some installer e.g. WEB-Installer
+			#if ($prod -eq "") {
+			if ($prod -match '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$') {
+				if([bool](Get-CimInstance -Query "Select IdentifyingNumber FROM Win32_Product where IdentifyingNumber LIKE '%$prod%'")){
+					## MSI Installation!
+					Write-Log -Message "start MSI Uninstall $($prod)" -LogType 'CMTrace'
+					Execute-MSI -Action 'Uninstall' -Path $prod -Parameters "/qn" -ContinueOnError $True
+					Write-Log -Message "$appNameWithoutVersion has been removed" -LogType 'CMTrace'
+				} else {
+					Write-Log -Message "$prod not a valid MSI Code" -LogType 'CMTrace'
+				}
+			}
+			else {
+				## some installer e.g. WEB-Installer
 				$unstr = $_.UninstallString + " --force-uninstall"
 				$unstring = $unstr.split('"')
 				Write-Log -Message "start Uninstall $($unString[1]) $($unString[2])" -LogType 'CMTrace' 
 				#Execute-Process -Path $unString[1] -Parameters $unString[2] -ContinueOnError $True
-				$erg = start-process $unString[1] -arg $unString[2] -Wait
+				$erg = Start-Process $unString[1] -arg $unString[2] -Wait
 				Write-Log -Message "$appNameWithoutVersion has been removed with" -LogType 'CMTrace'
 			}
-			else {
-			    ## MSI Installation!
-				Write-Log -Message "start MSI Uninstall $($prod)" -LogType 'CMTrace'
-				Execute-MSI -Action 'Uninstall' -Path $prod -Parameters "/qn" -ContinueOnError $True
-				Write-Log -Message "$appNameWithoutVersion has been removed" -LogType 'CMTrace'
-			}
 		}
-
-        
 		
 		##*===============================================
 		##* POST-UNINSTALLATION
