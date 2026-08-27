@@ -244,7 +244,7 @@ function Invoke-StageDrawio {
         InstallArgs     = "/qn /norestart"
         UninstallArgs   = "/qn /norestart"
         ProductCode     = $productCode
-        RunningProcess  = @()
+        RunningProcess  = @("draw.io")
         Detection       = @{
             Type      = "Compound"
             Connector = "AND"  # Set to "And" or "Or"

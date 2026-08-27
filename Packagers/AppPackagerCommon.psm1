@@ -1670,6 +1670,7 @@ function New-MECMApplicationFromManifest {
 
         $appName = $Manifest.AppName
         $cmAppName = $AppNamePattern
+        $architecture = $Manifest.Architecture
 
         $variables = @{ Publisher = $Manifest.Publisher; AppName = $Manifest.AppName; SoftwareVersion = $Manifest.SoftwareVersion; Language = $Manifest.Language; Architecture = $Manifest.Architecture }
 
@@ -1737,7 +1738,7 @@ function New-MECMApplicationFromManifest {
         $dtName = $cmAppName
         $dtParams = @{
             ApplicationName           = $cmAppName
-            DeploymentTypeName        = $cmAppName + " - Install"
+            DeploymentTypeName        = $cmAppName + " - Install $architecture"
             ContentLocation           = $NetworkContentPath
             InstallationBehaviorType  = 'InstallForSystem'
             LogonRequirementType      = 'WhetherOrNotUserLoggedOn'

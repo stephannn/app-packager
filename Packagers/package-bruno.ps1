@@ -85,10 +85,10 @@ if ($StageOnly -and $PackageOnly) {
 $GitHubApiUrl = "https://api.github.com/repos/usebruno/bruno/releases/latest"
 $DownloadIconUrl = "https://github.com/usebruno/bruno/raw/main/assets/images/logo-transparent.png"
 
-$Publisher      = "Bruno Software Inc."
-$AppName        = "bruno"
-$Language     = "MUI"
-$Architecture = "x64"
+$Publisher     = "Bruno Software Inc."
+$AppName       = "bruno"
+$Language      = "MUI"
+$Architecture  = "x64"
 
 $BaseDownloadRoot = Join-Path $DownloadRoot $AppName
 
@@ -241,10 +241,10 @@ function Invoke-StageBruno {
         Language        = $Language
         InstallerFile   = $MsiFileName
         InstallerType   = "MSI"
-        InstallArgs     = "/qn /norestart"
+        InstallArgs     = "/qn /norestart AUTOUPDATE_ENABLED=0"
         UninstallArgs   = "/qn /norestart"
         ProductCode     = $productCode
-        RunningProcess  = @()
+        RunningProcess  = @("Bruno")
         Detection       = @{
             Type      = "Compound"
             Connector = "AND"  # Set to "And" or "Or"
@@ -258,7 +258,7 @@ function Invoke-StageBruno {
                 },
                 @{
                     Type                = "RegistryKey"
-                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($displayVersion)_$($Language)_$($Architecture)_01"
+                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($productVersionRaw)_$($Language)_$($Architecture)_01"
                     Is64Bit             = $arpEntry.Is64Bit
                 }
             )
