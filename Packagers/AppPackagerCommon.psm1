@@ -233,6 +233,56 @@ function Get-PageContentWithFallback {
     }
 }
 
+function Invoke-DownloadIconWithRetry {
+    <#
+    .SYNOPSIS
+        Downloads an icon file with retry logic.
+
+    .DESCRIPTION
+        Downloads an icon file using Invoke-WebRequest with curl.exe fallback and retry logic.
+    #>
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$Url,
+
+        [Parameter(Mandatory)]
+        [string]$OutFile,
+
+        [Parameter(Mandatory)]
+        [string]$AppName,
+
+        [string[]]$ExtraCurlArgs = @(),
+
+        [int]$RetryCount = 1,
+
+        [int]$RetryDelaySec = 5,
+
+        [switch]$Quiet
+    )
+
+    try {
+        if ([string]::IsNullOrWhiteSpace($Url)) {
+            Write-Log "No icon URL provided; checking local folder." -Level WARN -Quiet:$Quiet
+            $localIcon = get-childitem -path "$PSScriptRoot\..\Icons" -filter "$AppName.*" -ErrorAction SilentlyContinue
+            If ($localIcon -and (Test-Path -LiteralPath $localIcon.FullName)) {
+                Write-Log "Icon file already exists locally: $AppName" -Quiet:$Quiet
+                Copy-Item -Path $localIcon.FullName -Destination "$($OutFile)$($localIcon.Extension)" -Force
+                return "$($OutFile)$($localIcon.Extension)"
+            } else {
+                Write-Log "No icon URL and no local icon file found for $AppName. Skipping icon download." -Level WARN -Quiet:$Quiet
+            }
+            return
+        } else {
+            Invoke-DownloadWithRetry -Url $Url -OutFile $OutFile -ExtraCurlArgs $ExtraCurlArgs -RetryCount $RetryCount -RetryDelaySec $RetryDelaySec -Quiet:$Quiet
+            return $OutFile
+        }
+    } catch {
+        Write-Log "Failed to download icon for $($AppName): $($_.Exception.Message)" -Level ERROR -Quiet:$Quiet
+    }
+    return $null
+
+}
+
 function Invoke-DownloadWithRetry {
     <#
     .SYNOPSIS

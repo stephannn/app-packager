@@ -14,6 +14,7 @@
 
         # Download
         'Get-PageContentWithFallback'
+        'Invoke-DownloadIconWithRetry'
         'Invoke-DownloadWithRetry'
 
         # Environment / pre-flight
