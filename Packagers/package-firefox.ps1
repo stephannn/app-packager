@@ -111,6 +111,7 @@ function Get-LatestFirefoxVersion {
     param([switch]$Quiet)
 
     Write-Log "Versions JSON URL            : $VersionsJsonUrl" -Quiet:$Quiet
+    $firefoxVersion = "LATEST_FIREFOX_VERSION"
 
     try {
         $jsonText = Get-PageContentWithFallback -Url $VersionsJsonUrl -Quiet:$Quiet
@@ -119,9 +120,9 @@ function Get-LatestFirefoxVersion {
         }
 
         $json = ConvertFrom-Json $jsonText
-        $version = $json.LATEST_FIREFOX_VERSION
+        $version = $json."$firefoxVersion"
         if ([string]::IsNullOrWhiteSpace($version)) {
-            throw "LATEST_FIREFOX_VERSION field was empty."
+            throw "$firefoxVersion field was empty."
         }
 
         Write-Log "Latest Firefox version       : $version" -Quiet:$Quiet
@@ -177,6 +178,11 @@ function Invoke-StageFirefox {
 
     Write-Log ""
     Write-Log "PSAppDeployToolkitPath: $PSAppDeployToolkitPath"
+
+    # --- Extract MSI properties ---
+    $props = Get-MsiPropertyMap -MsiPath $localMsi
+
+    $productVersionRaw = $props["ProductVersion"]
 
     # --- Versioned local content folder ---
     $localContentPath = Join-Path $BaseDownloadRoot $version
@@ -248,12 +254,12 @@ function Invoke-StageFirefox {
                     FileName      = "firefox.exe"
                     PropertyType  = "Version"
                     Operator      = "GreaterEquals"
-                    ExpectedValue = $version
+                    ExpectedValue = $productVersionRaw
                     Is64Bit       = $true
                 },
                 @{
                     Type                = "RegistryKey"
-                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($version)_$($Language)_$($Architecture)_01"
+                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($productVersionRaw)_$($Language)_$($Architecture)_01"
                     Is64Bit             = $arpEntry.Is64Bit
                 }
             )
