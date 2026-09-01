@@ -227,24 +227,55 @@ Try {
 
 			$prod = $_.ProductCode
 			
-			if ($prod -match '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$') {
-				if([bool](Get-CimInstance -Query "Select IdentifyingNumber FROM Win32_Product where IdentifyingNumber LIKE '%$prod%'")){
+			if ($_.ProductCode -match '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$') {
+				if([bool](Get-CimInstance -Query "Select IdentifyingNumber FROM Win32_Product where IdentifyingNumber LIKE '%$($_.ProductCode)%'")){
 					## MSI Installation!
-					Write-Log -Message "start MSI Uninstall $($prod)" -LogType 'CMTrace'
-					Execute-MSI -Action 'Uninstall' -Path $prod -Parameters "/qn" -ContinueOnError $True
+					Write-Log -Message "start MSI Uninstall $($_.ProductCode)" -LogType 'CMTrace'
+					Execute-MSI -Action 'Uninstall' -Path $_.ProductCode -Parameters "/qn" -ContinueOnError $True
 					Write-Log -Message "$appNameWithoutVersion has been removed" -LogType 'CMTrace'
 				} else {
-					Write-Log -Message "$prod not a valid MSI Code" -LogType 'CMTrace'
+					Write-Log -Message "$($_.ProductCode) not a valid MSI Code" -LogType 'CMTrace'
 				}
 			}
 			else {
-				## some installer e.g. WEB-Installer
-				$unstr = $_.UninstallString + " --force-uninstall"
-				$unstring = $unstr.split('"')
-				Write-Log -Message "start Uninstall $($unString[1]) $($unString[2])" -LogType 'CMTrace' 
-				#Execute-Process -Path $unString[1] -Parameters $unString[2] -ContinueOnError $True
-				$erg = Start-Process $unString[1] -arg $unString[2] -Wait
-				Write-Log -Message "$appNameWithoutVersion has been removed with" -LogType 'CMTrace'
+				if ($_.QuietUninstallString) {
+					$uninstallCommand = $_.QuietUninstallString
+				}
+				else {
+					$uninstallCommand = $_.UninstallString
+				}
+				
+				if ([string]::IsNullOrWhiteSpace($uninstallCommand)) {
+					Write-Log -Message "No uninstall command found for $($_.DisplayName)" -LogType 'CMTrace'
+					return
+				}
+				
+				if ($uninstallCommand -match '^\s*(\S+\.exe)\s*(.*)$') {
+					$exe = $matches[1]
+					$arguments = $matches[2]
+				}
+				else {
+					$exe = $uninstallCommand
+				}
+				
+				switch -Wildcard ($_.DisplayName) {
+
+					'*Mozilla Firefox*' { if ($arguments -notmatch '(^|\s)/S($|\s)') { $arguments = "/S".Trim() } }
+
+					'*Google Chrome*' { if ($arguments -notmatch '--force-uninstall') { $arguments = "$arguments --force-uninstall".Trim() } }
+
+					default {
+						if ([string]::IsNullOrWhiteSpace($arguments.Trim())) {
+							$arguments = "/VERYSILENT" #, -s, --silent, etc.
+						}
+					}
+				}
+				
+				Write-Log -Message "Starting uninstall: `"$exe`" $arguments" -LogType 'CMTrace'
+
+				$process = Start-Process -FilePath $exe -ArgumentList $arguments -Wait -PassThru
+
+				Write-Log  -Message "Uninstaller exited with code $($process.ExitCode)" -LogType 'CMTrace'
 			}
 		}
 				
