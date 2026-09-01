@@ -67,6 +67,8 @@
         # Language code helpers
         'Get-LanguageCode'
         'Get-LanguageFromCode'
+        'Get-CultureFromLCID'
+        'Get-CultureFromLanguageCode'
     )
 
     CmdletsToExport   = @()

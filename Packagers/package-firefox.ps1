@@ -99,7 +99,7 @@ $DownloadIconUrl  = ""
 
 $Publisher    = "Mozilla"
 $AppName      = "Firefox"
-$Language     = "MUI"
+$Language     = "DE"
 $Architecture = "x64"
 
 $BaseDownloadRoot = Join-Path $DownloadRoot "Firefox"
@@ -152,7 +152,8 @@ function Invoke-StageFirefox {
     if (-not $version) { throw "Could not resolve Firefox version." }
 
     $msiFileName = "Firefox Setup $version.msi"
-    $downloadUrl = "$DownloadBase/$version/win64/en-US/" + ($msiFileName -replace ' ', '%20')
+    
+    $downloadUrl = "$DownloadBase/$version/win64/$($Language.ToLower())/" + ($msiFileName -replace ' ', '%20')
 
     Write-Log "Version                      : $version"
     Write-Log "Installer filename           : $msiFileName"

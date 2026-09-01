@@ -166,17 +166,7 @@ function Invoke-StageDrawio {
         Write-Log "Local MSI exists. Skipping download."
     }
 
-    if($DownloadIconUrl){
-        Write-Log "Downloading ICO..."
-        try {
-            $localIco = ([IO.Path]::Combine($BaseDownloadRoot, $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl))))
-            Invoke-DownloadWithRetry -Url $DownloadIconUrl -OutFile $localIco
-        }
-        catch {
-            Write-Log "Failed to download ICO: $($_.Exception.Message)" -Level WARN
-            $localIco = ""
-        }
-    }
+    $localIco = Invoke-DownloadIconWithRetry -Url $DownloadIconUrl -OutFile ([IO.Path]::Combine($BaseDownloadRoot, $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)))) -AppName $AppName
 
     Write-Log ""
     Write-Log "PSAppDeployToolkitPath: $PSAppDeployToolkitPath"

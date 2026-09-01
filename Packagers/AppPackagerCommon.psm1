@@ -2573,6 +2573,45 @@ function Get-LanguageFromCode {
     }
 }
 
+function Get-CultureFromLCID {
+    param(
+        [Parameter(Mandatory)]
+        [int]$LCID
+    )
+
+    try {
+        return ([System.Globalization.CultureInfo]::GetCultureInfo($LCID)).Name
+    }
+    catch {
+        Write-Error "Invalid LCID: $LCID"
+    }
+}
+
+function Get-CultureFromLanguageCode {
+    param(
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[A-Za-z]{2}$')]
+        [string]$LanguageCode
+    )
+
+    $cultures = @{
+        'DE' = 'de-DE'
+        'EN' = 'en-US'
+        'FR' = 'fr-FR'
+        'ES' = 'es-ES'
+        'IT' = 'it-IT'
+        'NL' = 'nl-NL'
+    }
+
+    $code = $LanguageCode.ToUpper()
+
+    if ($cultures.ContainsKey($code)) {
+        return $cultures[$code]
+    }
+
+    throw "Unsupported language code: $LanguageCode"
+}
+
 # ---------------------------------------------------------------------------
 # Module export (belt-and-suspenders with .psd1 FunctionsToExport)
 # ---------------------------------------------------------------------------
