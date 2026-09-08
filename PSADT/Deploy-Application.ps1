@@ -224,9 +224,7 @@ Try {
         Remove-MSIApplications -Name $appNameWithoutVersion -Wildcard -ContinueOnError $true
 
         Get-InstalledApplication -name "*$($appNameWithoutVersion)*" -WildCard | ForEach-Object { 
-
-			$prod = $_.ProductCode
-			
+		
 			if ($_.ProductCode -match '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$') {
 				if([bool](Get-CimInstance -Query "Select IdentifyingNumber FROM Win32_Product where IdentifyingNumber LIKE '%$($_.ProductCode)%'")){
 					## MSI Installation!
@@ -310,16 +308,30 @@ Try {
 			}
 			default {
 				Write-Log -Message "Installing Exe file"
-				$installerPath = Join-Path -Path $dirFiles -ChildPath $App.InstallerFile
+				$command = Get-Command $App.InstallerFile -CommandType Application -ErrorAction SilentlyContinue
+
+				if ($command) {
+					$installerPath = $command.Source
+				}
+				else {
+					if ([System.IO.Path]::IsPathRooted($App.InstallerFile)) {
+						$installerPath = $App.InstallerFile
+					}
+					else {
+						$installerPath = Join-Path -Path $dirFiles -ChildPath $App.InstallerFile
+					}
+				}
+
+				#$installerPath = Join-Path -Path $dirFiles -ChildPath $App.InstallerFile
 				if(-not (Test-Path -LiteralPath $installerPath)){
 					throw "Installer file not found: $installerPath"
 				}
 				if([string]::IsNullOrEmpty($App.InstallArgs)){
 					Write-Log -Message "Found $($App.InstallerFile), now attempting to install."
-					Execute-Process -Path $installerPath
+					Execute-Process -Path "$installerPath" -WorkingDirectory $dirFiles
 				} else {
 					Write-Log -Message "Found $($App.InstallerFile), now attempting to install $($appName) with arguments $($App.InstallArgs)."
-					Execute-Process -Path $installerPath -Parameters "$($App.InstallArgs)"
+					Execute-Process -Path "$installerPath" -Parameters "$($App.InstallArgs)" -WorkingDirectory $dirFiles
 				}
 			}
 		}
@@ -386,6 +398,7 @@ Try {
 				if([string]::IsNullOrEmpty($App.UninstallArgs)){
 					Execute-MSI -Action Install -Path $App.ProductCode
 				} else {
+					Write-Log -Message "Found $($App.ProductCode), now attempting to uninstall $($appName) with arguments $($App.UninstallArgs)."
 					Execute-MSI -Action Install -Path $App.ProductCode -Parameters $App.UninstallArgs
 				}
 			}
