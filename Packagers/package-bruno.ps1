@@ -346,7 +346,7 @@ function Invoke-PackageBruno {
 if ($GetLatestVersionOnly) {
     try {
         $ProgressPreference = 'SilentlyContinue'
-        $info = Get-LatestDrawioRelease -Quiet
+        $info = Get-LatestBrunoRelease -Quiet
         if (-not $info) { exit 1 }
         Write-Output $info.Version
         exit 0

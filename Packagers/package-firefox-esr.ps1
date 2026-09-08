@@ -241,9 +241,9 @@ function Invoke-StageFirefox {
         SoftwareVersion  = $productVersionRaw
         Architecture     = $Architecture
         Language         = $Language
-        InstallerFile    = $msiFileName
-        InstallerType    = "MSI"
-        InstallArgs      = "/qn /norestart"
+        InstallerFile    = "msiexec.exe"
+        InstallerType    = "EXE"
+        InstallArgs      = "/i `"$msiFileName`" /qn /norestart DESKTOP_SHORTCUT=false"
         UninstallCommand = "C:\Program Files\Mozilla Firefox\uninstall\helper.exe"
         UninstallArgs    = "/S"
         RunningProcess   = @("firefox")
