@@ -235,6 +235,11 @@ Try {
 					Write-Log -Message "$appNameWithoutVersion has been removed" -LogType 'CMTrace'
 				} else {
 					Write-Log -Message "$($_.ProductCode) not a valid MSI Code" -LogType 'CMTrace'
+					Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Products\*\InstallProperties" |
+						Where-Object { $_.UninstallString -like "*$($_.ProductCode)*" -or $_.ModifyPath -like "*$($_.ProductCode)*" } |
+						ForEach-Object { Remove-Item (Split-Path $_.PSPath) -Recurse -Force -Verbose }
+					Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$($_.ProductCode)" -Recurse -Force -Verbose -ErrorAction SilentlyContinue
+					Remove-Item -Path "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$($_.ProductCode)" -Recurse -Force -Verbose -ErrorAction SilentlyContinue
 				}
 			}
 			else {
@@ -299,6 +304,7 @@ Try {
 				if([string]::IsNullOrEmpty($App.InstallArgs)){
 					Execute-MSI -Action Install -Path $installerPath
 				} else {
+					Write-Log -Message "Found $($installerPath), now attempting to install $($appName) with arguments $($App.InstallArgs)."
 					Execute-MSI -Action Install -Path $installerPath -Parameters $App.InstallArgs
 				}
 			}
