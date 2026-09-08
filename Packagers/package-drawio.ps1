@@ -231,7 +231,7 @@ function Invoke-StageDrawio {
         Language        = $Language
         InstallerFile   = $MsiFileName
         InstallerType   = "MSI"
-        InstallArgs     = "/qn /norestart"
+        InstallArgs     = "ALLUSERS=1 /qn /norestart"
         UninstallArgs   = "/qn /norestart"
         ProductCode     = $productCode
         RunningProcess  = @("draw.io")

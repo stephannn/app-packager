@@ -235,16 +235,19 @@ function Invoke-StageFirefox {
 
     $manifestPath = Join-Path $localContentPath "stage-manifest.json"
     Write-StageManifest -Path $manifestPath -ManifestData @{
-        AppName         = $AppName
-        DisplayName     = $AppName
-        Publisher       = $Publisher
-        SoftwareVersion = $productVersionRaw
-        InstallerFile   = $msiFileName
-        InstallerType   = "MSI"
-        InstallArgs     = "/qn /norestart"
-        UninstallArgs   = "/qn /norestart"
-        RunningProcess  = @("firefox")
-        Detection       = @{
+        AppName          = $AppName
+        DisplayName      = $AppName
+        Publisher        = $Publisher
+        SoftwareVersion  = $productVersionRaw
+        Architecture     = $Architecture
+        Language         = $Language
+        InstallerFile    = $msiFileName
+        InstallerType    = "MSI"
+        InstallArgs      = "/qn /norestart"
+        UninstallCommand = "C:\Program Files\Mozilla Firefox\uninstall\helper.exe"
+        UninstallArgs    = "/S"
+        RunningProcess   = @("firefox")
+        Detection        = @{
             Type      = "Compound"
             Connector = "AND"  # Set to "And" or "Or"
             Clauses   = @(
@@ -264,7 +267,7 @@ function Invoke-StageFirefox {
                 }
             )
         }
-        IconFileName    = if($localIco -and (Test-Path -LiteralPath $localIco)) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
+        IconFileName     = if($localIco -and (Test-Path -LiteralPath $localIco)) { [System.IO.Path]::GetFileName($localIco) } else { "" }
     }
 
     # Save version marker for Package phase
