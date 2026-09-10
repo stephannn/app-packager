@@ -168,7 +168,7 @@ function Resolve-NvidiaGeForceLatest {
 
         $installerFileName = [System.IO.Path]::GetFileName($downloadUrl)
 
-        Write-Log "Latest GeForce driver version: $version"   -Quiet:$Quiet
+        Write-Log "Latest $AppName driver version: $version"   -Quiet:$Quiet
         Write-Log "Driver name                  : $($latest.Name)" -Quiet:$Quiet
         Write-Log "Release date                 : $($latest.ReleaseDateTime)" -Quiet:$Quiet
         Write-Log "Download URL                 : $downloadUrl" -Quiet:$Quiet
