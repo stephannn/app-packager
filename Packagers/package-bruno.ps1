@@ -136,10 +136,6 @@ function Invoke-StageBruno {
     Write-Log ("=" * 60)
     Write-Log ""
 
-    if (-not (Test-IsAdmin)) {
-        Write-Log "Run PowerShell as Administrator." -Level WARN
-    }
-
     Initialize-Folder -Path $BaseDownloadRoot
 
     $releaseInfo = Get-LatestBrunoRelease
