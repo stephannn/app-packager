@@ -94,7 +94,9 @@ if ($StageOnly -and $PackageOnly) {
 
 # --- Configuration ---
 $GitHubApiUrl    = "https://api.github.com/repos/notepad-plus-plus/notepad-plus-plus/releases/latest"
+$PluginUrl       = "https://raw.githubusercontent.com/notepad-plus-plus/nppPluginList/refs/heads/master/doc/plugin_list_x64.md"
 $DownloadIconUrl = ""
+$Plugins         = @("Compare", "JSON Viewer", "JSTool", "XML Tools")
 
 $Publisher     = "GNU"
 $AppName       = "Notepad++"
@@ -142,6 +144,53 @@ function Get-LatestNotepadPlusPlusVersion {
     }
     catch {
         Write-Log "Failed to get Notepad++ version: $($_.Exception.Message)" -Level ERROR
+        return $null
+    }
+}
+
+
+function Get-NotepadPlusPlusPlugin {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PluginName,
+        [switch]$Quiet
+    )
+
+    Write-Log "GitHub Plugin URL               : $PluginUrl" -Quiet:$Quiet
+
+    try {
+        try {
+            $markdownText = Get-PageContentWithFallback -Url $PluginUrl -Quiet:$Quiet
+        }
+        catch {
+            throw "Failed to download the plugin list: $_"
+        }
+
+        $escapedName = [regex]::Escape($PluginName)
+        $pattern = "(?m)^\|\s*$escapedName\s*\|.*?\|.*?\|\s*\[.*?\]\((https?://[^\s\)]+)\)"
+
+        if ($markdownText -match $pattern) {
+            $downloadUrl = $Matches[1]
+        }
+
+        if (-not $downloadUrl) {
+            throw "Could not find the plugin."
+        }
+
+        if ($downloadUrl -match '/releases/download/(v?[\d\.]+)/') {
+            $version = $Matches[1]
+        }
+
+        Write-Log "Notepad++ plugin $PluginName  : $version" -Quiet:$Quiet
+
+        return [PSCustomObject]@{
+            Version     = $version
+            DownloadUrl = $downloadUrl
+            FileName    = [System.IO.Path]::GetFileName($downloadUrl)
+        }
+    }
+    catch {
+        Write-Log "Failed to get Notepad++ plugin: $($_.Exception.Message)" -Level ERROR
         return $null
     }
 }
@@ -198,6 +247,22 @@ function Invoke-StageNotepadPlusPlus {
         }
     }
 
+    $Plugins | ForEach-Object {
+        Write-Log "Downloading Plugin $_"
+        $pluginInfo = Get-NotepadPlusPlusPlugin -PluginName $_
+        if (-not $pluginInfo) { throw "Could not resolve Notepad++ plugin." }
+
+        $pluginVersion      = $pluginInfo.Version
+        $pluginDownloadUrl  = $pluginInfo.DownloadUrl
+        $pluginFileName     = $pluginInfo.FileName
+
+        $localPlugin = Join-Path $BaseDownloadRoot $pluginFileName
+
+        Write-Log "Downloading plugin $pluginFileName in version $pluginVersion"
+        Invoke-DownloadWithRetry -Url $pluginDownloadUrl -OutFile $localPlugin -ExtraCurlArgs @('-A', 'PowerShell')
+
+    }
+
     # --- Versioned local content folder ---
     $localContentPath = Join-Path $BaseDownloadRoot $version
     Initialize-Folder -Path $localContentPath
@@ -216,6 +281,13 @@ function Invoke-StageNotepadPlusPlus {
     }
     else {
         Write-Log "Staged ICO exists. Skipping copy."
+    }
+    if($Plugins) {
+        Get-ChildItem $BaseDownloadRoot | Where-Object {
+            $fileName = $_.Name; ($Plugins.Where({ $fileName -like "*$($_.Trim().Replace(' ', ''))*" }).Count -gt 0) -or ($Plugins.Where({ $fileName -like "*$($_)*" }).Count -gt 0) } | ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination $localContentPath -Force -ErrorAction Stop
+                Write-Log "Copied Plugin '$($_.Name)' to staged folder : $localContentPath" 
+            }
     }
 
     # --- Generate content wrappers ---
@@ -240,10 +312,23 @@ function Invoke-StageNotepadPlusPlus {
     }
 
     # --- Write stage manifest ---
-    $detectionPath = "{0}\Notepad++" -f $env:ProgramFiles
+    $detectionPath = "{0}\Notepad" -f $env:ProgramFiles
 
-    $appName   = "Notepad++ (64-bit x64)"
-    $publisher = "Don Ho"
+    
+
+    $installScript = @"
+Start-Process -FilePath '.\$installerFileName' -ArgumentList '/S /noUpdater /D=$detectionPath' -Wait -NoNewWindow;
+Get-ChildItem -Path '.' -Filter '*.zip' | ForEach-Object {
+    Expand-Archive -LiteralPath `$_.FullName -DestinationPath ([System.IO.Path]::Combine('$detectionPath', 'plugins', (`$_.BaseName -replace '[\._-](v?\d+.*|x64|64|Release|uni).*$', ''))) -Force
+}
+"@
+    $inlineArgs = "-NoProfile -ExecutionPolicy Bypass -Command `"$($installScript -replace '\r?\n', ' ')`""
+
+    $uninstallScript = @"
+Get-Item -Path '$detectionPath\plugins' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force;
+if(Test-Path '$detectionPath\uninstall.exe') {Start-Process -FilePath '$detectionPath\uninstall.exe' -ArgumentList '/S -Wait -NoNewWindow'};
+"@
+    $uninlineArgs = "-NoProfile -ExecutionPolicy Bypass -Command `"$($uninstallScript -replace '\r?\n', ' ')`""
 
     Write-Log ""
     Write-Log "Detection path               : $detectionPath"
@@ -252,18 +337,19 @@ function Invoke-StageNotepadPlusPlus {
 
     $manifestPath = Join-Path $localContentPath "stage-manifest.json"
     Write-StageManifest -Path $manifestPath -ManifestData @{
-        AppName         = $appName
-        DisplayName     = $AppName
-        Publisher       = $publisher
-        SoftwareVersion = $version
-        Architecture    = $Architecture
-        Language        = $Language
-        InstallerFile   = $installerFileName
-        InstallerType   = "EXE"
-        InstallArgs     = "/S /noUpdater"
-        UninstallArgs   = "/S"
-        RunningProcess  = @("notepad++")
-        Detection       = @{
+        AppName          = $AppName
+        DisplayName      = $AppName
+        Publisher        = $Publisher
+        SoftwareVersion  = $version
+        Architecture     = $Architecture
+        Language         = $Language
+        InstallerFile    = "powershell.exe"
+        InstallerType    = "EXE"
+        InstallArgs      = $inlineArgs
+        UninstallCommand = "powershell.exe"
+        UninstallArgs    = $uninlineArgs
+        RunningProcess   = @("notepad++")
+        Detection        = @{
             Type      = "Compound"
             Connector = "AND"  # Set to "And" or "Or"
             Clauses   = @(
@@ -283,7 +369,7 @@ function Invoke-StageNotepadPlusPlus {
                 }
             )
         }
-        IconFileName    = if($localIco -and (Test-Path -LiteralPath $localIco)) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
+        IconFileName     = if($localIco -and (Test-Path -LiteralPath $localIco)) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
     }
 
     # Save version marker for Package phase
