@@ -359,7 +359,7 @@ if(Test-Path '$detectionPath\uninstall.exe') {Start-Process -FilePath '$detectio
                 }
             )
         }
-        IconFileName     = if($localIco -and (Test-Path -LiteralPath $localIco)) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
+        IconFileName     = if($localIco -and (Test-Path -LiteralPath $localIco)) { [System.IO.Path]::GetFileName($localIco) } else { "" }
     }
 
     # Save version marker for Package phase
