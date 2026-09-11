@@ -233,11 +233,11 @@ Try {
 					Write-Log -Message "$appNameWithoutVersion has been removed" -LogType 'CMTrace'
 				} else {
 					Write-Log -Message "$($_.ProductCode) not a valid MSI Code" -LogType 'CMTrace'
-					Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Products\*\InstallProperties" |
-						Where-Object { $_.UninstallString -like "*$($_.ProductCode)*" -or $_.ModifyPath -like "*$($_.ProductCode)*" } |
-						ForEach-Object { Remove-Item (Split-Path $_.PSPath) -Recurse -Force -Verbose }
-					Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$($_.ProductCode)" -Recurse -Force -Verbose -ErrorAction SilentlyContinue
-					Remove-Item -Path "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$($_.ProductCode)" -Recurse -Force -Verbose -ErrorAction SilentlyContinue
+					#Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Products\*\InstallProperties" |
+					#	Where-Object { $_.UninstallString -like "*$($_.ProductCode)*" -or $_.ModifyPath -like "*$($_.ProductCode)*" } |
+					#	ForEach-Object { Remove-Item (Split-Path $_.PSPath) -Recurse -Force -Verbose }
+					#Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$($_.ProductCode)" -Recurse -Force -Verbose -ErrorAction SilentlyContinue
+					#Remove-Item -Path "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$($_.ProductCode)" -Recurse -Force -Verbose -ErrorAction SilentlyContinue
 				}
 			}
 			else {
@@ -248,6 +248,8 @@ Try {
 					$uninstallCommand = $_.UninstallString
 				}
 				
+				$arguments = $null
+
 				if ([string]::IsNullOrWhiteSpace($uninstallCommand)) {
 					Write-Log -Message "No uninstall command found for $($_.DisplayName)" -LogType 'CMTrace'
 					return
@@ -255,7 +257,7 @@ Try {
 				
 				if ($uninstallCommand -match '^\s*(\S+\.exe)\s*(.*)$') {
 					$exe = $matches[1]
-					$arguments = $matches[2]
+					$arguments = $matches[2].Trim()
 				}
 				else {
 					$exe = $uninstallCommand
@@ -268,8 +270,8 @@ Try {
 					'*Google Chrome*' { if ($arguments -notmatch '--force-uninstall') { $arguments = "$arguments --force-uninstall".Trim() } }
 
 					default {
-						if ([string]::IsNullOrWhiteSpace($arguments.Trim())) {
-							$arguments = "/VERYSILENT" #, -s, --silent, etc.
+						if ([string]::IsNullOrWhiteSpace($arguments)) {
+							$arguments = "/VERYSILENT /S" #, -s, --silent, etc.
 						}
 					}
 				}
@@ -284,7 +286,7 @@ Try {
 				
 		## Clean up Branding Keys
 		If (Test-Path 'HKLM:\SOFTWARE\SCCM') {
-			Get-ChildItem -Path 'HKLM:\SOFTWARE\SCCM' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match ($App.Vendor + "_" + $appNameWithoutVersion + "_") } | Remove-Item -Force -ErrorAction SilentlyContinue
+			Get-ChildItem -Path 'HKLM:\SOFTWARE\SCCM' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match [regex]::Escape($appVendor + "_" + $appNameWithoutVersion + "_") } | Remove-Item -Force -ErrorAction SilentlyContinue
 		}
 		
 		##*===============================================
@@ -300,10 +302,10 @@ Try {
 					throw "MSI file not found: $installerPath"
 				}
 				if([string]::IsNullOrEmpty($App.InstallArgs)){
-					Execute-MSI -Action Install -Path $installerPath
+					Execute-MSI -Action Install -Path $installerPath -SkipMSIAlreadyInstalledCheck
 				} else {
 					Write-Log -Message "Found $($installerPath), now attempting to install $($appName) with arguments $($App.InstallArgs)."
-					Execute-MSI -Action Install -Path $installerPath -Parameters $App.InstallArgs
+					Execute-MSI -Action Install -Path $installerPath -Parameters $App.InstallArgs -SkipMSIAlreadyInstalledCheck
 				}
 			}
 			default {
@@ -423,12 +425,12 @@ Try {
 				} else {
 					if([string]::IsNullOrEmpty($App.UninstallArgs)){
 						Write-Log -Message "Found $($App.UninstallFile), now attempting to uninstall."
-						#Execute-Process -Path $installerPath
-						Start-Process $installerPath -Wait
+						#Start-Process $installerPath -Wait
+						Execute-Process -Path "$installerPath" -WorkingDirectory $dirFiles
 					} else {
 						Write-Log -Message "Found $($App.UninstallFile), now attempting to uninstall $($appName) with arguments $($App.UninstallArgs)."
-						#Execute-Process -Path $installerPath -Parameters "$($App.UninstallArgs)"
-						Start-Process $installerPath -ArgumentList "$($App.UninstallArgs)" -Wait
+						#Start-Process $installerPath -ArgumentList "$($App.UninstallArgs)" -Wait
+						Execute-Process -Path "$installerPath" -Parameters "$($App.UninstallArgs)" -WorkingDirectory $dirFiles
 					}
 				}
 			}
@@ -453,13 +455,46 @@ Try {
 				}
 			}
 			else {
-				## some installer e.g. WEB-Installer
-				$unstr = $_.UninstallString + " --force-uninstall"
-				$unstring = $unstr.split('"')
-				Write-Log -Message "start Uninstall $($unString[1]) $($unString[2])" -LogType 'CMTrace' 
-				#Execute-Process -Path $unString[1] -Parameters $unString[2] -ContinueOnError $True
-				$erg = Start-Process $unString[1] -arg $unString[2] -Wait
-				Write-Log -Message "$appNameWithoutVersion has been removed with" -LogType 'CMTrace'
+				if ($_.QuietUninstallString) {
+					$uninstallCommand = $_.QuietUninstallString
+				}
+				else {
+					$uninstallCommand = $_.UninstallString
+				}
+				
+				$arguments = $null
+
+				if ([string]::IsNullOrWhiteSpace($uninstallCommand)) {
+					Write-Log -Message "No uninstall command found for $($_.DisplayName)" -LogType 'CMTrace'
+					return
+				}
+				
+				if ($uninstallCommand -match '^\s*(\S+\.exe)\s*(.*)$') {
+					$exe = $matches[1]
+					$arguments = $matches[2].Trim()
+				}
+				else {
+					$exe = $uninstallCommand
+				}
+				
+				switch -Wildcard ($_.DisplayName) {
+
+					'*Mozilla Firefox*' { if ($arguments -notmatch '(^|\s)/S($|\s)') { $arguments = "/S".Trim() } }
+
+					'*Google Chrome*' { if ($arguments -notmatch '--force-uninstall') { $arguments = "$arguments --force-uninstall".Trim() } }
+
+					default {
+						if ([string]::IsNullOrWhiteSpace($arguments)) {
+							$arguments = "/VERYSILENT /S" #, -s, --silent, etc.
+						}
+					}
+				}
+				
+				Write-Log -Message "Starting uninstall: `"$exe`" $arguments" -LogType 'CMTrace'
+
+				$process = Start-Process -FilePath $exe -ArgumentList $arguments -Wait -PassThru
+
+				Write-Log  -Message "Uninstaller exited with code $($process.ExitCode)" -LogType 'CMTrace'
 			}
 		}
 		
