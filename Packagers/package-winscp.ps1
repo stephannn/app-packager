@@ -1,4 +1,4 @@
-﻿<#
+<#
 Vendor: Martin Prikryl
 App: WinSCP (x64)
 CMName: WinSCP
@@ -61,16 +61,19 @@ DownloadPageUrl: https://winscp.net/eng/download.php
     - PowerShell 5.1
     - ConfigMgr Admin Console installed (ConfigurationManager PowerShell module available)
     - RBAC permissions to create Applications and Deployment Types
+    - Local administrator
     - Write access to FileServerPath
 #>
 
 param(
     [string]$SiteCode = "MCM",
+    [string]$MECMApplicationFolder = "",
     [string]$Comment = "",
     [string]$FileServerPath = "\\fileserver\sccm$",
-    [ValidateSet('Nested','Flat')]
-    [string]$ContentLayout = "Nested",
+    [string]$ApplicationSharePattern = "Applications\{ProductName}\{Version}",
+    [string]$AppNamePattern = "{AppName} - {SoftwareVersion}",
     [string]$DownloadRoot = "C:\temp\ap",
+    [String]$PSAppDeployToolkitPath = "",
     [int]$EstimatedRuntimeMins = 15,
     [int]$MaximumRuntimeMins = 30,
     [string]$LogPath,
@@ -90,8 +93,13 @@ if ($StageOnly -and $PackageOnly) {
 }
 
 # --- Configuration ---
-$VendorFolder = "WinSCP"
-$AppFolder    = "WinSCP"
+$DownloadUrl = "https://winscp.net/eng/downloads.php"
+$DownloadIconUrl = ""
+
+$Publisher     = "Martin Prikryl"
+$AppName       = "WinSCP"
+$Language      = "MUI"
+$Architecture  = "x64"
 
 $BaseDownloadRoot = Join-Path $DownloadRoot "WinSCP"
 
@@ -101,12 +109,14 @@ $BaseDownloadRoot = Join-Path $DownloadRoot "WinSCP"
 function Get-LatestWinSCPVersion {
     param([switch]$Quiet)
 
-    $url = "https://winscp.net/eng/downloads.php"
+    $url = $DownloadUrl
     Write-Log "WinSCP downloads page        : $url" -Quiet:$Quiet
 
     try {
-        $html = (curl.exe -L --max-redirs 10 --fail --silent --show-error $url) -join "`n"
-        if ($LASTEXITCODE -ne 0) { throw "Failed to fetch WinSCP downloads page: $url" }
+        $html = Get-PageContentWithFallback -Url $DownloadUrl -Quiet:$Quiet
+        if ([string]::IsNullOrWhiteSpace($json)) {
+            throw "Could not retrieve $DownloadUrl using either Invoke-WebRequest or curl.exe."
+        }
 
         $version = $null
         if ($html -match 'Download\s+WinSCP\s+([0-9]+\.[0-9]+\.[0-9]+)') {
@@ -120,11 +130,11 @@ function Get-LatestWinSCPVersion {
             throw "Could not parse latest WinSCP version from downloads page."
         }
 
-        Write-Log "Latest WinSCP version        : $version" -Quiet:$Quiet
+        Write-Log "Latest $AppName version        : $version" -Quiet:$Quiet
         return $version
     }
     catch {
-        Write-Log "Failed to get WinSCP version: $($_.Exception.Message)" -Level ERROR
+        Write-Log "Failed to get $AppName version: $($_.Exception.Message)" -Level ERROR
         return $null
     }
 }
@@ -161,7 +171,7 @@ function Test-DownloadedInstaller {
 function Install-WinSCPForDiscovery {
     param([Parameter(Mandatory)][string]$InstallerPath)
 
-    Write-Log "Installing WinSCP locally for registry discovery..."
+    Write-Log "Installing $AppName locally for registry discovery..."
     Write-Log "Installer                    : $InstallerPath"
 
     $p = Start-Process -FilePath $InstallerPath -ArgumentList "/VERYSILENT /NORESTART /ALLUSERS" -Wait -PassThru -ErrorAction Stop
@@ -236,7 +246,7 @@ function Uninstall-WinSCPFromDiscovery {
 function Invoke-StageWinSCP {
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "WinSCP (x64) - STAGE phase"
+    Write-Log "$AppName - STAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 
@@ -277,6 +287,11 @@ function Invoke-StageWinSCP {
         Write-Log "Local installer exists. Skipping download."
     }
 
+    $localIco = Invoke-DownloadIconWithRetry -Url $DownloadIconUrl -OutFile ([IO.Path]::Combine($BaseDownloadRoot, $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)))) -AppName $AppName
+
+    Write-Log ""
+    Write-Log "PSAppDeployToolkitPath: $PSAppDeployToolkitPath"
+
     # --- Versioned local content folder ---
     $localContentPath = Join-Path $BaseDownloadRoot $version
     Initialize-Folder -Path $localContentPath
@@ -288,6 +303,13 @@ function Invoke-StageWinSCP {
     }
     else {
         Write-Log "Staged EXE exists. Skipping copy."
+    }
+    if(-not (Test-Path -LiteralPath (Join-Path $localContentPath ([System.IO.Path]::GetFileName($localIco))))) {
+        Copy-Item -LiteralPath $localIco -Destination (Join-Path $localContentPath ([System.IO.Path]::GetFileName($localIco))) -Force -ErrorAction Stop
+        Write-Log "Copied ICO to staged folder  : $localContentPath"
+    }
+    else {
+        Write-Log "Staged ICO exists. Skipping copy."
     }
 
     # --- Generate content wrappers ---
@@ -310,9 +332,11 @@ function Invoke-StageWinSCP {
         'exit 0'
     ) -join "`r`n"
 
-    Write-ContentWrappers -OutputPath $localContentPath `
-        -InstallPs1Content $installContent `
-        -UninstallPs1Content $uninstallContent
+    if([string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $true -or (Test-Path -LiteralPath $PSAppDeployToolkitPath) -eq $false) {
+        Write-ContentWrappers -OutputPath $localContentPath `
+            -InstallPs1Content $installContent `
+            -UninstallPs1Content $uninstallContent
+    }
 
     # --- Temp install for registry discovery ---
     Write-Log ""
@@ -351,23 +375,38 @@ function Invoke-StageWinSCP {
 
     $manifestPath = Join-Path $localContentPath "stage-manifest.json"
     Write-StageManifest -Path $manifestPath -ManifestData @{
-        AppName         = $appName
-        Publisher       = $publisher
+        AppName         = $AppName
+        DisplayName     = $AppName
+        Publisher       = $Publisher
         SoftwareVersion = $version
+        Architecture    = $Architecture
+        Language        = $Language
         InstallerFile   = $installerFileName
         InstallerType   = "EXE"
         InstallArgs     = "/VERYSILENT /NORESTART /ALLUSERS"
         UninstallArgs   = "/VERYSILENT /NORESTART"
         RunningProcess  = @("WinSCP")
         Detection       = @{
-            Type          = "File"
-            FilePath      = "C:\Program Files (x86)\WinSCP"
-            FileName      = "WinSCP.exe"
-            PropertyType  = "Version"
-            Operator      = "GreaterEquals"
-            ExpectedValue = $version
-            Is64Bit       = $false
+            Type      = "Compound"
+            Connector = "AND"  # Set to "And" or "Or"
+            Clauses   = @(
+                @{
+                    Type          = "File"
+                    FilePath      = "C:\Program Files (x86)\WinSCP"
+                    FileName      = "WinSCP.exe"
+                    PropertyType  = "Version"
+                    Operator      = "GreaterEquals"
+                    ExpectedValue = $version
+                    Is64Bit       = $false
+                },
+                @{
+                    Type                = "RegistryKey"
+                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($version)_$($Language)_$($Architecture)_01"
+                    Is64Bit             = $arpEntry.Is64Bit
+                }
+            )
         }
+        IconFileName     = if($localIco -and (Test-Path -LiteralPath $localIco)) { [System.IO.Path]::GetFileName($localIco) } else { "" }
     }
 
     # Save version marker for Package phase
@@ -387,7 +426,7 @@ function Invoke-StageWinSCP {
 function Invoke-PackageWinSCP {
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "WinSCP (x64) - PACKAGE phase"
+    Write-Log "$AppName - PACKAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 
@@ -417,31 +456,29 @@ function Invoke-PackageWinSCP {
         throw "Network root path not accessible: $FileServerPath"
     }
 
-    $networkContentPath = Get-NetworkContentPath -FileServerPath $FileServerPath -VendorFolder $VendorFolder -AppFolder $AppFolder -Version $manifest.SoftwareVersion -Layout $ContentLayout
+    $publish = Publish-StagedContentToNetwork `
+        -FileServerPath $FileServerPath `
+        -PathPattern $ApplicationSharePattern `
+        -Manifest $manifest `
+        -LocalContentPath $localContentPath `
+        -ManifestPath $manifestPath `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
+        -SkipStageManifestCopy
 
-    Write-Log "Network content path         : $networkContentPath"
-    Write-Log ""
+    $networkAppRoot = $publish.NetworkAppRoot
+    #$networkContentPath = $publish.NetworkContentPath
+    $manifest = $publish.Manifest
 
-    # --- Copy staged content to network ---
-    $localFiles = Get-ChildItem -Path $localContentPath -File -ErrorAction Stop
-    foreach ($f in $localFiles) {
-        if ($f.Name -eq "stage-manifest.json") { continue }
-        $dest = Join-Path $networkContentPath $f.Name
-        if (-not (Test-Path -LiteralPath $dest)) {
-            Copy-Item -LiteralPath $f.FullName -Destination $dest -Force -ErrorAction Stop
-            Write-Log "Copied to network            : $($f.Name)"
-        }
-        else {
-            Write-Log "Already on network           : $($f.Name)"
-        }
-    }
-
+    Write-Log "Starting to create MECM application..."
     # --- MECM application ---
     New-MECMApplicationFromManifest `
         -Manifest $manifest `
+        -AppNamePattern $AppNamePattern `
         -SiteCode $SiteCode `
+        -MCMAppFolder $MECMApplicationFolder `
         -Comment $Comment `
-        -NetworkContentPath $networkContentPath `
+        -NetworkContentPath $networkAppRoot `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
         -EstimatedRuntimeMins $EstimatedRuntimeMins `
         -MaximumRuntimeMins $MaximumRuntimeMins
 }
@@ -467,7 +504,7 @@ try {
 
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "WinSCP (x64) Auto-Packager starting"
+    Write-Log "$AppName Auto-Packager starting"
     Write-Log ("=" * 60)
     Write-Log ""
     Write-Log ("RunAsUser                    : {0}\{1}" -f $env:USERDOMAIN,$env:USERNAME)
