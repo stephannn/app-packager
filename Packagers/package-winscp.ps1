@@ -93,7 +93,8 @@ if ($StageOnly -and $PackageOnly) {
 }
 
 # --- Configuration ---
-$DownloadUrl = "https://winscp.net/eng/downloads.php"
+$VersionUrl = "https://winscp.net/eng/downloads.php"
+$DownloadUrl = "https://sourceforge.net/projects/winscp/files/WinSCP/$Version/WinSCP-$Version-Setup.exe/download"
 $DownloadIconUrl = ""
 
 $Publisher     = "Martin Prikryl"
@@ -109,13 +110,12 @@ $BaseDownloadRoot = Join-Path $DownloadRoot "WinSCP"
 function Get-LatestWinSCPVersion {
     param([switch]$Quiet)
 
-    $url = $DownloadUrl
-    Write-Log "WinSCP downloads page        : $url" -Quiet:$Quiet
+    Write-Log "WinSCP downloads page        : $VersionUrl" -Quiet:$Quiet
 
     try {
-        $html = Get-PageContentWithFallback -Url $DownloadUrl -Quiet:$Quiet
-        if ([string]::IsNullOrWhiteSpace($json)) {
-            throw "Could not retrieve $DownloadUrl using either Invoke-WebRequest or curl.exe."
+        $html = Get-PageContentWithFallback -Url $VersionUrl -Quiet:$Quiet
+        if ([string]::IsNullOrWhiteSpace($html)) {
+            throw "Could not retrieve $VersionUrl using either Invoke-WebRequest or curl.exe."
         }
 
         $version = $null
@@ -137,15 +137,6 @@ function Get-LatestWinSCPVersion {
         Write-Log "Failed to get $AppName version: $($_.Exception.Message)" -Level ERROR
         return $null
     }
-}
-
-function Get-WinSCPDownloadUrl {
-    param([Parameter(Mandatory)][string]$Version)
-
-    # SourceForge hosts WinSCP releases; URL redirects to a mirror
-    $url = "https://sourceforge.net/projects/winscp/files/WinSCP/$Version/WinSCP-$Version-Setup.exe/download"
-    Write-Log "SourceForge download URL     : $url"
-    return $url
 }
 
 function Test-DownloadedInstaller {
@@ -271,10 +262,12 @@ function Invoke-StageWinSCP {
     Write-Log "Local installer path         : $localExe"
 
     if (-not (Test-Path -LiteralPath $localExe)) {
-        $downloadUrl = Get-WinSCPDownloadUrl -Version $version
+        $downloadUrl = "https://sourceforge.net/projects/winscp/files/WinSCP/$Version/WinSCP-$Version-Setup.exe/download"
+        $directUrl = Get-SourceForgeDirectUrl -Url $downloadUrl
 
         Write-Log "Downloading installer..."
-        Invoke-DownloadWithRetry -Url $downloadUrl -OutFile $localExe -ExtraCurlArgs @('-L', '--max-redirs', '10')
+        #Invoke-DownloadWithRetry -Url $downloadUrl -OutFile $localExe -ExtraCurlArgs @('-L', '--max-redirs', '10')
+        Invoke-DownloadWithRetry -Url $directUrl -OutFile $localExe
 
         if (-not (Test-DownloadedInstaller -Path $localExe)) {
             try { Remove-Item -LiteralPath $localExe -Force -ErrorAction SilentlyContinue } catch {}
@@ -338,7 +331,7 @@ function Invoke-StageWinSCP {
             -UninstallPs1Content $uninstallContent
     }
 
-    # --- Temp install for registry discovery ---
+<#     # --- Temp install for registry discovery ---
     Write-Log ""
     Install-WinSCPForDiscovery -InstallerPath $localExe
 
@@ -357,11 +350,6 @@ function Invoke-StageWinSCP {
         throw "Failed to compute registry relative key path."
     }
 
-    $publisher = $uninstallEntry.Publisher
-    if ([string]::IsNullOrWhiteSpace($publisher)) { $publisher = "Martin Prikryl" }
-
-    $appName = $uninstallEntry.DisplayName
-
     # Uninstall discovery install
     Write-Log ""
     Uninstall-WinSCPFromDiscovery `
@@ -371,7 +359,7 @@ function Invoke-StageWinSCP {
     # --- Write stage manifest ---
     Write-Log ""
     Write-Log "Detection RegKey             : $regRelative"
-    Write-Log ""
+    Write-Log "" #>
 
     $manifestPath = Join-Path $localContentPath "stage-manifest.json"
     Write-StageManifest -Path $manifestPath -ManifestData @{
@@ -384,6 +372,7 @@ function Invoke-StageWinSCP {
         InstallerFile   = $installerFileName
         InstallerType   = "EXE"
         InstallArgs     = "/VERYSILENT /NORESTART /ALLUSERS"
+        UninstallCommand = "C:\Program Files\WinSCP\unins0*.exe"
         UninstallArgs   = "/VERYSILENT /NORESTART"
         RunningProcess  = @("WinSCP")
         Detection       = @{
@@ -481,6 +470,7 @@ function Invoke-PackageWinSCP {
         -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
         -EstimatedRuntimeMins $EstimatedRuntimeMins `
         -MaximumRuntimeMins $MaximumRuntimeMins
+
 }
 
 

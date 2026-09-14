@@ -16,6 +16,7 @@
         'Get-PageContentWithFallback'
         'Invoke-DownloadIconWithRetry'
         'Invoke-DownloadWithRetry'
+        'Get-SourceForgeDirectUrl'
 
         # Environment / pre-flight
         'Test-IsAdmin'

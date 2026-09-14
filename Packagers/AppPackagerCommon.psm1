@@ -233,6 +233,29 @@ function Get-PageContentWithFallback {
     }
 }
 
+function Get-SourceForgeDirectUrl {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Url
+    )
+
+    # 1. Fetch the HTML content without downloading a file
+    $response = Invoke-WebRequest -Uri $Url -UseBasicParsing
+
+    # 2. Extract link pointing directly to downloads.sourceforge.net or carrying use_mirror
+    # Regex looks for the 'direct link' href pattern common to SourceForge landing pages
+    if ($response.Content -match 'href="(?<directUrl>https://downloads\.sourceforge\.net/project/[^"]+)"') {
+        return $Matches['directUrl']
+    }
+    
+    # Alternative regex fallback: look for the meta refresh URL pattern
+    if ($response.Content -match 'url=(?<directUrl>https://[^"]+use_mirror=[^"]+)"') {
+        return $Matches['directUrl']
+    }
+
+    throw "Could not parse direct download mirror URL from SourceForge page."
+}
+
 function Invoke-DownloadIconWithRetry {
     <#
     .SYNOPSIS
@@ -1775,6 +1798,7 @@ function New-MECMApplicationFromManifest {
         }
         if([string]::IsNullOrWhiteSpace($iconFile) -eq $false){
             Write-Log "Setting Icon file: $iconFile"
+            ##$iconFile = (Resolve-Path -LiteralPath $iconFile -ErrorAction Stop).Path
             $cmAppParams['IconLocationFile'] = $iconFile
         }
         $cmApp = New-CMApplication @cmAppParams
