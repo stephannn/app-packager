@@ -94,7 +94,7 @@ if ($StageOnly -and $PackageOnly) {
 
 # --- Configuration ---
 $VersionUrl = "https://winscp.net/eng/downloads.php"
-$DownloadUrl = "https://sourceforge.net/projects/winscp/files/WinSCP/$Version/WinSCP-$Version.msi/download"
+$DownloadUrl = "https://sourceforge.net/projects/winscp/files/WinSCP/$Version/WinSCP-$Version-Setup.exe/download"
 $DownloadIconUrl = ""
 
 $Publisher     = "Martin Prikryl"
@@ -175,29 +175,39 @@ function Invoke-StageWinSCP {
 
     # --- Get version ---
     $version = Get-LatestWinSCPVersion
-    if (-not $version) { throw "Could not resolve $AppName version." }
+    if (-not $version) { throw "Could not resolve WinSCP version." }
 
     if ($version -notmatch '^\d+\.\d+\.\d+$') {
         throw "Parsed version '$version' does not look like x.y.z"
     }
 
-    $MsiFileName = "WinSCP-$version.msi"
+    $installerFileName = "WinSCP-$version-Setup.exe"
 
     Write-Log "Version                      : $version"
-    Write-Log "Download URL                 : $downloadUrl"
-    Write-Log "MSI filename                 : $MsiFileName"
+    Write-Log "Installer filename           : $installerFileName"
     Write-Log ""
 
     # --- Download from SourceForge ---
-    $localMsi = Join-Path $BaseDownloadRoot $MsiFileName
-    Write-Log "Local MSI path               : $localMsi"
+    $localExe = Join-Path $BaseDownloadRoot $installerFileName
+    Write-Log "Local installer path         : $localExe"
 
-    if (-not (Test-Path -LiteralPath $localMsi)) {
-        Write-Log "Downloading $AppName MSI..."
-        Invoke-DownloadWithRetry -Url $downloadUrl -OutFile $localMsi
+    if (-not (Test-Path -LiteralPath $localExe)) {
+        $downloadUrl = "https://sourceforge.net/projects/winscp/files/WinSCP/$Version/WinSCP-$Version-Setup.exe/download"
+        $directUrl = Get-SourceForgeDirectUrl -Url $downloadUrl
+
+        Write-Log "Downloading installer..."
+        #Invoke-DownloadWithRetry -Url $downloadUrl -OutFile $localExe -ExtraCurlArgs @('-L', '--max-redirs', '10')
+        Invoke-DownloadWithRetry -Url $directUrl -OutFile $localExe
+
+        if (-not (Test-DownloadedInstaller -Path $localExe)) {
+            try { Remove-Item -LiteralPath $localExe -Force -ErrorAction SilentlyContinue } catch {}
+            throw "Downloaded file did not validate as installer (too small or HTML content)."
+        }
+
+        Write-Log ("Download validated             ({0} bytes)" -f (Get-Item -LiteralPath $localExe).Length)
     }
     else {
-        Write-Log "Local MSI exists. Skipping download."
+        Write-Log "Local installer exists. Skipping download."
     }
 
     $localIco = Invoke-DownloadIconWithRetry -Url $DownloadIconUrl -OutFile ([IO.Path]::Combine($BaseDownloadRoot, $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)))) -AppName $AppName
@@ -205,32 +215,17 @@ function Invoke-StageWinSCP {
     Write-Log ""
     Write-Log "PSAppDeployToolkitPath: $PSAppDeployToolkitPath"
 
-    # --- Extract MSI properties ---
-    $props = Get-MsiPropertyMap -MsiPath $localMsi
-
-    $productVersionRaw = $props["ProductVersion"]
-    $productCode       = $props["ProductCode"]
-
-    if ([string]::IsNullOrWhiteSpace($productVersionRaw)) { throw "MSI ProductVersion missing." }
-    if ([string]::IsNullOrWhiteSpace($productCode))       { throw "MSI ProductCode missing." }
-
-    Write-Log "MSI ProductName              : $($props['ProductName'])"
-    Write-Log "MSI ProductVersion           : $productVersionRaw"
-    Write-Log "MSI Manufacturer             : $($props['Manufacturer'])"
-    Write-Log "MSI ProductCode              : $productCode"
-    Write-Log ""
-
     # --- Versioned local content folder ---
     $localContentPath = Join-Path $BaseDownloadRoot $version
     Initialize-Folder -Path $localContentPath
 
-    $stagedMsi = Join-Path $localContentPath $MsiFileName
-    if (-not (Test-Path -LiteralPath $stagedMsi)) {
-        Copy-Item -LiteralPath $localMsi -Destination $stagedMsi -Force -ErrorAction Stop
-        Write-Log "Copied MSI to staged folder  : $stagedMsi"
+    $stagedExe = Join-Path $localContentPath $installerFileName
+    if (-not (Test-Path -LiteralPath $stagedExe)) {
+        Copy-Item -LiteralPath $localExe -Destination $stagedExe -Force -ErrorAction Stop
+        Write-Log "Copied EXE to staged folder  : $stagedExe"
     }
     else {
-        Write-Log "Staged MSI exists. Skipping copy."
+        Write-Log "Staged EXE exists. Skipping copy."
     }
     if(-not (Test-Path -LiteralPath (Join-Path $localContentPath ([System.IO.Path]::GetFileName($localIco))))) {
         Copy-Item -LiteralPath $localIco -Destination (Join-Path $localContentPath ([System.IO.Path]::GetFileName($localIco))) -Force -ErrorAction Stop
@@ -240,18 +235,30 @@ function Invoke-StageWinSCP {
         Write-Log "Staged ICO exists. Skipping copy."
     }
 
-    # --- Derive ARP detection from MSI properties ---
-    $arpRegistryKey = "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\" + $productCode
-    Write-Log "ARP RegistryKey              : $arpRegistryKey"
-    Write-Log "ARP DisplayVersion           : $productVersionRaw"
-    Write-Log ""
+    # --- Generate content wrappers ---
+    $installContent = (
+        ('$exePath = Join-Path $PSScriptRoot ''{0}''' -f $installerFileName),
+        '$proc = Start-Process -FilePath $exePath -ArgumentList @(''/VERYSILENT'', ''/NORESTART'', ''/ALLUSERS'') -Wait -PassThru -NoNewWindow',
+        'exit $proc.ExitCode'
+    ) -join "`r`n"
+
+    $uninstallContent = (
+        '$uninstaller = Join-Path $env:ProgramFiles ''WinSCP\unins000.exe''',
+        'if (-not (Test-Path -LiteralPath $uninstaller)) {',
+        '    $uninstaller = Join-Path ${env:ProgramFiles(x86)} ''WinSCP\unins000.exe''',
+        '}',
+        'if (Test-Path -LiteralPath $uninstaller) {',
+        '    $proc = Start-Process -FilePath $uninstaller -ArgumentList @(''/VERYSILENT'', ''/NORESTART'') -Wait -PassThru -NoNewWindow',
+        '    exit $proc.ExitCode',
+        '}',
+        'Write-Warning ''WinSCP uninstall executable not found.''',
+        'exit 0'
+    ) -join "`r`n"
 
     if([string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $true -or (Test-Path -LiteralPath $PSAppDeployToolkitPath) -eq $false) {
-        # --- Generate content wrappers ---
-        $wrapperContent = New-MsiWrapperContent -MsiFileName $MsiFileName
         Write-ContentWrappers -OutputPath $localContentPath `
-            -InstallPs1Content $wrapperContent.Install `
-            -UninstallPs1Content $wrapperContent.Uninstall
+            -InstallPs1Content $installContent `
+            -UninstallPs1Content $uninstallContent
     }
 
     $manifestPath = Join-Path $localContentPath "stage-manifest.json"
@@ -259,29 +266,31 @@ function Invoke-StageWinSCP {
         AppName         = $AppName
         DisplayName     = $AppName
         Publisher       = $Publisher
-        SoftwareVersion = $productVersionRaw
+        SoftwareVersion = $version
         Architecture    = $Architecture
         Language        = $Language
-        InstallerFile   = $MsiFileName
-        InstallerType   = "MSI"
-        InstallArgs     = "/qn /norestart DESKTOPSHORTCUT=0"
-        UninstallArgs   = "/qn /norestart"
-        ProductCode     = $productCode
+        InstallerFile   = $installerFileName
+        InstallerType   = "EXE"
+        InstallArgs     = "/VERYSILENT /NORESTART /ALLUSERS /MERGETASKS=!desktopicon"
+        UninstallCommand = "C:\Program Files\WinSCP\unins0*.exe"
+        UninstallArgs   = "/VERYSILENT /SUPPRESSMSGBOXES /NOCANCEL /NORESTART /RESTARTEXITCODE=3010 /CLOSEAPPLICATIONS"
         RunningProcess  = @("WinSCP")
         Detection       = @{
             Type      = "Compound"
             Connector = "AND"  # Set to "And" or "Or"
             Clauses   = @(
                 @{
-                    Type                = "RegistryKeyValue"
-                    RegistryKeyRelative = $arpRegistryKey
-                    ValueName           = "DisplayVersion"
-                    ExpectedValue       = $productVersionRaw
-                    Is64Bit             = $true
+                    Type          = "File"
+                    FilePath      = "C:\Program Files (x86)\WinSCP"
+                    FileName      = "WinSCP.exe"
+                    PropertyType  = "Version"
+                    Operator      = "GreaterEquals"
+                    ExpectedValue = $version
+                    Is64Bit       = $false
                 },
                 @{
                     Type                = "RegistryKey"
-                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($productVersionRaw)_$($Language)_$($Architecture)_01"
+                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($version)_$($Language)_$($Architecture)_01"
                     Is64Bit             = $arpEntry.Is64Bit
                 }
             )
