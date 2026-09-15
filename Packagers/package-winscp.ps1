@@ -258,12 +258,12 @@ function Invoke-StageWinSCP {
                     RegistryKeyRelative = $arpRegistryKey
                     ValueName           = "DisplayVersion"
                     ExpectedValue       = $productVersionRaw
-                    Is64Bit             = $true
+                    Is64Bit             = $false
                 },
                 @{
                     Type                = "RegistryKey"
                     RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($productVersionRaw)_$($Language)_$($Architecture)_01"
-                    Is64Bit             = $arpEntry.Is64Bit
+                    Is64Bit             = if($Architecture -eq "x64") { $true } else { $false }
                 }
             )
         }

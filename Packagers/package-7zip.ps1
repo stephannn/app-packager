@@ -262,7 +262,7 @@ function Invoke-Stage7Zip {
         RegistryKeyRelative = $arpRegistryKey
         DisplayName         = $productName
         DisplayVersion      = $productVersionRaw   # raw MSI ProductVersion = what Windows writes to registry
-        Is64Bit             = $true
+        Is64Bit             = if($Architecture -eq "x64") { $true } else { $false }
     }
     Write-Log "ARP detection derived from MSI properties (no temp install needed)."
 
@@ -311,7 +311,7 @@ function Invoke-Stage7Zip {
                 @{
                     Type                = "RegistryKey"
                     RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($displayVersion)_$($Language)_$($Architecture)_01"
-                    Is64Bit             = $arpEntry.Is64Bit
+                    Is64Bit             = if($Architecture -eq "x64") { $true } else { $false }
                 }
             )
         }

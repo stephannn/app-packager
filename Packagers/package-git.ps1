@@ -297,7 +297,7 @@ function Invoke-StageGit {
                 @{
                     Type                = "RegistryKey"
                     RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($version)_$($Language)_$($Architecture)_01"
-                    Is64Bit             = $arpEntry.Is64Bit
+                    Is64Bit             = if($Architecture -eq "x64") { $true } else { $false }
                 }
             )
         }
