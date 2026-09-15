@@ -94,7 +94,7 @@ if ($StageOnly -and $PackageOnly) {
 
 # --- Configuration ---
 $VersionUrl = "https://winscp.net/eng/downloads.php"
-$DownloadUrl = "https://sourceforge.net/projects/winscp/files/WinSCP/$Version/WinSCP-$Version.msi/download"
+$DownloadUrl = "https://sourceforge.net/projects/winscp/files/WinSCP/{0}/WinSCP-{0}.msi/download"
 $DownloadIconUrl = ""
 
 $Publisher     = "Martin Prikryl"
@@ -122,7 +122,7 @@ function Get-LatestWinSCPVersion {
         if ($html -match 'Download\s+WinSCP\s+([0-9]+\.[0-9]+\.[0-9]+)') {
             $version = $matches[1]
         }
-        elseif ($html -match 'WinSCP-([0-9]+\.[0-9]+\.[0-9]+)-Setup\.exe') {
+        elseif ($html -match 'WinSCP-([0-9]+\.[0-9]+\.[0-9]+)\.msi') {
             $version = $matches[1]
         }
 
@@ -137,26 +137,6 @@ function Get-LatestWinSCPVersion {
         Write-Log "Failed to get $AppName version: $($_.Exception.Message)" -Level ERROR
         return $null
     }
-}
-
-function Test-DownloadedInstaller {
-    param([Parameter(Mandatory)][string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) { return $false }
-
-    $len = (Get-Item -LiteralPath $Path).Length
-    if ($len -lt 1MB) { return $false }
-
-    $fs = [System.IO.File]::OpenRead($Path)
-    try {
-        $buf = New-Object byte[] 64
-        [void]$fs.Read($buf, 0, $buf.Length)
-        $head = [System.Text.Encoding]::ASCII.GetString($buf)
-        if ($head -match '<!DOCTYPE|<html|<HTML') { return $false }
-    }
-    finally { $fs.Dispose() }
-
-    return $true
 }
 
 
@@ -182,6 +162,7 @@ function Invoke-StageWinSCP {
     }
 
     $MsiFileName = "WinSCP-$version.msi"
+    $downloadUrl  = Get-SourceForgeDirectUrl -Url ($DownloadUrl -f $version)
 
     Write-Log "Version                      : $version"
     Write-Log "Download URL                 : $downloadUrl"
