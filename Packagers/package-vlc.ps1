@@ -1,4 +1,4 @@
-﻿<#
+<#
 Vendor: VideoLAN
 App: VLC Media Player
 CMName: VLC Media Player
@@ -61,16 +61,19 @@ DownloadPageUrl: https://www.videolan.org/vlc/
     - PowerShell 5.1
     - ConfigMgr Admin Console installed (ConfigurationManager PowerShell module available)
     - RBAC permissions to create Applications and Deployment Types
+    - Local administrator
     - Write access to FileServerPath
 #>
 
 param(
     [string]$SiteCode = "MCM",
+    [string]$MECMApplicationFolder = "",
     [string]$Comment = "",
     [string]$FileServerPath = "\\fileserver\sccm$",
-    [ValidateSet('Nested','Flat')]
-    [string]$ContentLayout = "Nested",
+    [string]$ApplicationSharePattern = "Applications\{ProductName}\{Version}",
+    [string]$AppNamePattern = "{AppName} - {SoftwareVersion}",
     [string]$DownloadRoot = "C:\temp\ap",
+    [String]$PSAppDeployToolkitPath = "",
     [int]$EstimatedRuntimeMins = 15,
     [int]$MaximumRuntimeMins = 30,
     [string]$LogPath,
@@ -91,9 +94,12 @@ if ($StageOnly -and $PackageOnly) {
 
 # --- Configuration ---
 $DirectoryListingUrl = "https://download.videolan.org/vlc/last/win64/"
+$DownloadIconUrl = ""
 
-$VendorFolder = "VideoLAN"
-$AppFolder    = "VLC Media Player"
+$Publisher     = "VideoLan"
+$AppName       = "VLC Media Player"
+$Language      = "EN"
+$Architecture  = "x64"
 
 $BaseDownloadRoot = Join-Path $DownloadRoot "VLC"
 
@@ -111,8 +117,10 @@ function Get-LatestVLCVersion {
     Write-Log "Directory listing URL        : $DirectoryListingUrl" -Quiet:$Quiet
 
     try {
-        $html = (& curl.exe -L --fail --silent --show-error $DirectoryListingUrl) -join "`n"
-        if ($LASTEXITCODE -ne 0) { throw "Failed to fetch VLC directory listing." }
+        $html = Get-PageContentWithFallback -Url $DirectoryListingUrl -Quiet:$Quiet
+        if ([string]::IsNullOrWhiteSpace($html)) {
+            throw "Could not retrieve $DirectoryListingUrl using either Invoke-WebRequest or curl.exe."
+        }
 
         # Match filenames like vlc-3.0.23-win64.msi
         if ($html -match 'vlc-(\d+\.\d+\.\d+)-win64\.msi') {
@@ -137,7 +145,7 @@ function Get-LatestVLCVersion {
 function Invoke-StageVLC {
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "VLC Media Player (x64) - STAGE phase"
+    Write-Log "$AppName - STAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 
@@ -166,6 +174,8 @@ function Invoke-StageVLC {
     else {
         Write-Log "Local MSI exists. Skipping download."
     }
+
+    $localIco = Invoke-DownloadIconWithRetry -Url $DownloadIconUrl -OutFile ([IO.Path]::Combine($BaseDownloadRoot, $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)))) -AppName $AppName
 
     # --- Extract MSI properties ---
     $props = Get-MsiPropertyMap -MsiPath $localMsi
@@ -196,11 +206,13 @@ function Invoke-StageVLC {
         Write-Log "Staged MSI exists. Skipping copy."
     }
 
-    # --- Generate content wrappers ---
-    $wrapperContent = New-MsiWrapperContent -MsiFileName $msiFileName
-    Write-ContentWrappers -OutputPath $localContentPath `
-        -InstallPs1Content $wrapperContent.Install `
-        -UninstallPs1Content $wrapperContent.Uninstall
+    if([string]::IsNullOrWhiteSpace($PSAppDeployToolkitPath) -eq $true -or (Test-Path -LiteralPath $PSAppDeployToolkitPath) -eq $false) {
+        # --- Generate content wrappers ---
+        $wrapperContent = New-MsiWrapperContent -MsiFileName $msiFileName
+        Write-ContentWrappers -OutputPath $localContentPath `
+            -InstallPs1Content $wrapperContent.Install `
+            -UninstallPs1Content $wrapperContent.Uninstall
+    }
 
     # --- Write stage manifest ---
     $arpKey = "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$productCode"
@@ -216,23 +228,38 @@ function Invoke-StageVLC {
 
     $manifestPath = Join-Path $localContentPath "stage-manifest.json"
     Write-StageManifest -Path $manifestPath -ManifestData @{
-        AppName         = $appName
-        Publisher       = $publisher
-        SoftwareVersion = $version
-        InstallerFile   = $msiFileName
-        InstallerType   = "MSI"
-        InstallArgs     = "/qn /norestart"
-        UninstallArgs   = "/qn /norestart"
-        RunningProcess  = @("vlc")
-        Detection       = @{
-            Type                = "RegistryKeyValue"
-            RegistryKeyRelative = $arpKey
-            ValueName           = "DisplayVersion"
-            PropertyType        = "Version"
-            ExpectedValue       = $productVersionRaw
-            Operator            = "GreaterEquals"
-            Is64Bit             = $true
+        AppName          = $AppName
+        DisplayName      = $AppName
+        Publisher        = $Publisher
+        SoftwareVersion  = $version
+        Architecture     = $Architecture
+        Language         = $Language
+        InstallerFile    = $msiFileName
+        InstallerType    = "MSI"
+        InstallArgs      = "/qn /norestart"
+        UninstallArgs    = "/qn /norestart"
+        RunningProcess   = @("vlc")
+        Detection        = @{
+            Type      = "Compound"
+            Connector = "AND"  # Set to "And" or "Or"
+            Clauses   = @(
+                @{
+                    Type                = "RegistryKeyValue"
+                    RegistryKeyRelative = $arpKey
+                    ValueName           = "DisplayVersion"
+                    PropertyType        = "Version"
+                    ExpectedValue       = $version
+                    Operator            = "GreaterEquals"
+                    Is64Bit             = $true
+                },
+                @{
+                    Type                = "RegistryKey"
+                    RegistryKeyRelative = "SOFTWARE\SCCM\$($Publisher)_$($AppName)_$($version)_$($Language)_$($Architecture)_01"
+                    Is64Bit             = $arpEntry.Is64Bit
+                }
+            )
         }
+        IconFileName     = if($localIco -and (Test-Path -LiteralPath $localIco)) { [System.IO.Path]::GetFileName($localIco) } else { "" }
     }
 
     # Save version marker for Package phase
@@ -252,7 +279,7 @@ function Invoke-StageVLC {
 function Invoke-PackageVLC {
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "VLC Media Player (x64) - PACKAGE phase"
+    Write-Log "$AppName - PACKAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 
@@ -283,31 +310,29 @@ function Invoke-PackageVLC {
         throw "Network root path not accessible: $FileServerPath"
     }
 
-    $networkContentPath = Get-NetworkContentPath -FileServerPath $FileServerPath -VendorFolder $VendorFolder -AppFolder $AppFolder -Version $manifest.SoftwareVersion -Layout $ContentLayout
+    $publish = Publish-StagedContentToNetwork `
+        -FileServerPath $FileServerPath `
+        -PathPattern $ApplicationSharePattern `
+        -Manifest $manifest `
+        -LocalContentPath $localContentPath `
+        -ManifestPath $manifestPath `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
+        -SkipStageManifestCopy
 
-    Write-Log "Network content path         : $networkContentPath"
-    Write-Log ""
+    $networkAppRoot = $publish.NetworkAppRoot
+    #$networkContentPath = $publish.NetworkContentPath
+    $manifest = $publish.Manifest
 
-    # --- Copy staged content to network ---
-    $localFiles = Get-ChildItem -Path $localContentPath -File -ErrorAction Stop
-    foreach ($f in $localFiles) {
-        if ($f.Name -eq "stage-manifest.json") { continue }
-        $dest = Join-Path $networkContentPath $f.Name
-        if (-not (Test-Path -LiteralPath $dest)) {
-            Copy-Item -LiteralPath $f.FullName -Destination $dest -Force -ErrorAction Stop
-            Write-Log "Copied to network            : $($f.Name)"
-        }
-        else {
-            Write-Log "Already on network           : $($f.Name)"
-        }
-    }
-
+    Write-Log "Starting to create MECM application..."
     # --- MECM application ---
     New-MECMApplicationFromManifest `
         -Manifest $manifest `
+        -AppNamePattern $AppNamePattern `
         -SiteCode $SiteCode `
+        -MCMAppFolder $MECMApplicationFolder `
         -Comment $Comment `
-        -NetworkContentPath $networkContentPath `
+        -NetworkContentPath $networkAppRoot `
+        -PSAppDeployToolkitPath $PSAppDeployToolkitPath `
         -EstimatedRuntimeMins $EstimatedRuntimeMins `
         -MaximumRuntimeMins $MaximumRuntimeMins
 }
@@ -333,7 +358,7 @@ try {
 
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "VLC Media Player (x64) Auto-Packager starting"
+    Write-Log "$AppName Auto-Packager starting"
     Write-Log ("=" * 60)
     Write-Log ""
     Write-Log ("RunAsUser                    : {0}\{1}" -f $env:USERDOMAIN,$env:USERNAME)

@@ -197,17 +197,7 @@ function Invoke-StageGit {
         Write-Log "Local installer exists. Skipping download."
     }
 
-    if($DownloadIconUrl){
-        Write-Log "Downloading ICO..."
-        try {
-            $localIco = ([IO.Path]::Combine($BaseDownloadRoot, $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl))))
-            Invoke-DownloadWithRetry -Url $DownloadIconUrl -OutFile $localIco
-        }
-        catch {
-            Write-Log "Failed to download ICO: $($_.Exception.Message)" -Level WARN
-            $localIco = ""
-        }
-    }
+    $localIco = Invoke-DownloadIconWithRetry -Url $DownloadIconUrl -OutFile ([IO.Path]::Combine($BaseDownloadRoot, $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)))) -AppName $AppName
 
     # --- Versioned local content folder ---
     $localContentPath = Join-Path $BaseDownloadRoot $version
@@ -311,7 +301,7 @@ function Invoke-StageGit {
                 }
             )
         }
-        IconFileName    = if($localIco -and (Test-Path -LiteralPath $localIco)) { $AppName + ([System.IO.Path]::GetExtension($DownloadIconUrl)) } else { "" }
+        IconFileName     = if($localIco -and (Test-Path -LiteralPath $localIco)) { [System.IO.Path]::GetFileName($localIco) } else { "" }
     }
 
     # Save version marker for Package phase
