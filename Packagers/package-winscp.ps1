@@ -100,7 +100,7 @@ $DownloadIconUrl = ""
 $Publisher     = "Martin Prikryl"
 $AppName       = "WinSCP"
 $Language      = "MUI"
-$Architecture  = "x64"
+$Architecture  = "x86"
 
 $BaseDownloadRoot = Join-Path $DownloadRoot "WinSCP"
 
@@ -371,7 +371,7 @@ function Invoke-StageWinSCP {
         Language        = $Language
         InstallerFile   = $installerFileName
         InstallerType   = "EXE"
-        InstallArgs     = "/VERYSILENT /NORESTART /ALLUSERS"
+        InstallArgs     = "/VERYSILENT /NORESTART /ALLUSERS /MERGETASKS=!desktopicon"
         UninstallCommand = "C:\Program Files\WinSCP\unins0*.exe"
         UninstallArgs   = "/VERYSILENT /NORESTART"
         RunningProcess  = @("WinSCP")
