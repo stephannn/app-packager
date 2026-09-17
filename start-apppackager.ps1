@@ -2128,31 +2128,31 @@ Install-TitleBarDragFallback -Window $window
 # =============================================================================
 # Find named controls
 # =============================================================================
-$txtAppTitle     = $window.FindName('txtAppTitle')
-$toggleTheme     = $window.FindName('toggleTheme')
-$txtThemeLabel   = $window.FindName('txtThemeLabel')
-$btnCheckLatest  = $window.FindName('btnCheckLatest')
-$btnCheckMECM    = $window.FindName('btnCheckMECM')
-$btnStage        = $window.FindName('btnStage')
-$btnPackage      = $window.FindName('btnPackage')
-$btnFullRun      = $window.FindName('btnFullRun')
-$btnOptions      = $window.FindName('btnOptions')
-$toggleDebugCols = $window.FindName('toggleDebugCols')
-$txtGridFilter = $window.FindName('txtGridFilter')
-$txtComment      = $window.FindName('txtComment')
-$dataGrid        = $window.FindName('dataGrid')
-$colSelected     = $window.FindName('colSelected')
-$txtLog          = $window.FindName('txtLog')
-$lblLogOutput    = $window.FindName('lblLogOutput')
-$txtStatus       = $window.FindName('txtStatus')
-$colCMName       = $window.FindName('colCMName')
-$colScript       = $window.FindName('colScript')
-$colVendorURL    = $window.FindName('colVendorURL')
-$colLastChecked  = $window.FindName('colLastChecked')
-$progressOverlay  = $window.FindName('progressOverlay')
-$txtProgressTitle = $window.FindName('txtProgressTitle')
-$txtProgressStep  = $window.FindName('txtProgressStep')
-$btnPausePipeline = $window.FindName('btnPausePipeline')
+$txtAppTitle       = $window.FindName('txtAppTitle')
+$toggleTheme       = $window.FindName('toggleTheme')
+$txtThemeLabel     = $window.FindName('txtThemeLabel')
+$btnCheckLatest    = $window.FindName('btnCheckLatest')
+$btnCheckMECM      = $window.FindName('btnCheckMECM')
+$btnStage          = $window.FindName('btnStage')
+$btnPackage        = $window.FindName('btnPackage')
+$btnFullRun        = $window.FindName('btnFullRun')
+$btnOptions        = $window.FindName('btnOptions')
+$toggleDebugCols   = $window.FindName('toggleDebugCols')
+$txtGridFilter     = $window.FindName('txtGridFilter')
+$txtComment        = $window.FindName('txtComment')
+$dataGrid          = $window.FindName('dataGrid')
+$colSelected       = $window.FindName('colSelected')
+$txtLog            = $window.FindName('txtLog')
+$lblLogOutput      = $window.FindName('lblLogOutput')
+$txtStatus         = $window.FindName('txtStatus')
+$colCMName         = $window.FindName('colCMName')
+$colScript         = $window.FindName('colScript')
+$colVendorURL      = $window.FindName('colVendorURL')
+$colLastChecked    = $window.FindName('colLastChecked')
+$progressOverlay   = $window.FindName('progressOverlay')
+$txtProgressTitle  = $window.FindName('txtProgressTitle')
+$txtProgressStep   = $window.FindName('txtProgressStep')
+$btnPausePipeline  = $window.FindName('btnPausePipeline')
 $btnCancelPipeline = $window.FindName('btnCancelPipeline')
 
 # =============================================================================
@@ -2253,6 +2253,18 @@ function Update-GridFilter {
             $dataGrid.ItemsSource = $script:PackagerData
         }
         return
+    }
+    # Iterate through all data items
+    foreach ($item in $script:PackagerData) {
+        $isMatch = ([string]$item.Application).ToLowerInvariant().Contains($needle) -or
+                   ([string]$item.Vendor).ToLowerInvariant().Contains($needle) -or
+                   ([string]$item.Status).ToLowerInvariant().Contains($needle) -or
+                   ([string]$item.CMName).ToLowerInvariant().Contains($needle)
+
+        # If it doesn't match the search needle, uncheck it
+        if (-not $isMatch) {
+            $item.Selected = $false
+        }
     }
     $dataGrid.ItemsSource = @($script:PackagerData | Where-Object {
         ([string]$_.Application).ToLowerInvariant().Contains($needle) -or
