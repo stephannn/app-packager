@@ -1,7 +1,7 @@
 <#
 Vendor: NVIDIA
-App: NVIDIA Graphics Driver - Quadro (x64)
-CMName: NVIDIA Graphics Driver - Quadro
+App: NVIDIA Graphics Driver - RTX (x64)
+CMName: NVIDIA Graphics Driver - RTX
 VendorUrl: https://www.nvidia.com/Download/index.aspx
 CPE: cpe:2.3:a:nvidia:gpu_display_driver:*:*:*:*:*:*:*:*
 ReleaseNotesUrl: https://www.nvidia.com/en-us/drivers/drivers-faq/
@@ -9,25 +9,27 @@ DownloadPageUrl: https://www.nvidia.com/Download/index.aspx
 UpdateCadenceDays: 30
 
 .SYNOPSIS
-    Packages the latest NVIDIA Quadro DCH driver (x64) for MECM.
+    Packages the latest NVIDIA RTX DCH driver (x64) for MECM.
 
 .DESCRIPTION
     Queries NVIDIA's AjaxDriverService.php JSON endpoint with pinned psid/pfid
-    for the Quadro RTX 5000 Series flagship (covers all current Maxwell+
-    Quadro GTX/RTX cards via the unified DCH driver), downloads the latest
-    Game Ready WHQL installer, stages content to a versioned local folder,
-    and creates an MECM Application with ARP registry-based detection on
-    the constant NVIDIA Display.Driver uninstall GUID.
+    for the NVIDIA RTX PRO Series flagship (covers all current RTX PRO /
+    RTX A-series workstation cards via the unified Quadro Certified DCH
+    driver), downloads the latest WHQL Enterprise installer, stages content
+    to a versioned local folder, and creates an MECM Application with ARP
+    registry-based detection on the constant NVIDIA Display.Driver
+    uninstall GUID.
 
-    Supports two-phase operation:
-      -StageOnly    Resolve latest version, download installer, write manifest
-      -PackageOnly  Read manifest, copy to network, create MECM application
+    The Quadro Certified DCH installer is a single package covering the
+    whole current NVIDIA RTX PRO / RTX A workstation line, so the specific
+    flagship pfid is a stable lookup key for "the latest Enterprise driver"
+    rather than a per-GPU selector. Update only if NVIDIA retires PSID 132.
 
-    The psid/pfid pinning answers the typical "combo box ambiguity" of the
-    NVIDIA download page: one DCH driver covers the whole current Quadro
-    line, so the specific flagship pfid is just a key into the version
-    lookup -- the resulting installer is identical regardless of which
-    current-series pfid you pin.
+    Sibling packager: package-nvidia-geforce.ps1 (Game Ready branch for
+    consumer GeForce GTX/RTX cards). Both packagers detect on the same
+    NVIDIA Display.Driver ARP GUID but install into separately named MECM
+    applications so a fleet with mixed Quadro/GeForce hardware can target
+    each appropriately.
 
     GetLatestVersionOnly issues a single JSON call (no installer download)
     and exits.
@@ -41,7 +43,7 @@ UpdateCadenceDays: 30
 .PARAMETER FileServerPath
     UNC root that contains your Applications folder (example: \\fileserver\sccm$).
     Content is staged under:
-      <FileServerPath>\Applications\NVIDIA\NVIDIA Graphics Driver - Quadro\<Version>
+      <FileServerPath>\Applications\NVIDIA\NVIDIA Graphics Driver - Rtx\<Version>
 
 .PARAMETER DownloadRoot
     Local root folder for staging downloaded installers.
@@ -108,7 +110,7 @@ if ($StageOnly -and $PackageOnly) {
 $NvidiaApiBaseUrl = "https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/services/AjaxDriverService.php"
 $DownloadIconUrl  = ""
 $NvidiaPsid       = 134
-$NvidiaPfid       = 1085
+$NvidiaPfid       = 1071
 $NvidiaOsId       = 57       # Windows 10 64-bit (DCH driver covers Win10 + Win11 in one package)
 $NvidiaLangId     = 1033     # English - United States
 $NvidiaDch        = 1        # DCH driver (required for Windows 10 1809+)
@@ -121,15 +123,15 @@ $NvidiaUpCrd      = 0        # Game Ready branch (1 = Production Branch / Enterp
 #$NvidiaDisplayDriverArpKey = "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}_Display.Driver"
 
 $Publisher      = "NVIDIA Corporation"
-$AppName        = "Quadro Driver"
+$AppName        = "RTX Driver"
 $Language       = "de-DE"
 
-$BaseDownloadRoot = Join-Path $DownloadRoot "NvidiaQuadro"
+$BaseDownloadRoot = Join-Path $DownloadRoot "NvidiaRTX"
 
 # --- Functions ---
 
 
-function Resolve-NvidiaQuadroLatest {
+function Resolve-NvidiaRtxLatest {
     <#
     .SYNOPSIS
         Calls AjaxDriverService.php and returns @{ Version; DownloadUrl; InstallerFileName }.
@@ -191,7 +193,7 @@ function Resolve-NvidiaQuadroLatest {
 # Stage phase
 # ---------------------------------------------------------------------------
 
-function Invoke-StageNvidiaQuadro {
+function Invoke-StageNvidiaRtx {
     Write-Log ""
     Write-Log ("=" * 60)
     Write-Log "NVIDIA Graphics $AppName - STAGE phase"
@@ -200,7 +202,7 @@ function Invoke-StageNvidiaQuadro {
 
     Initialize-Folder -Path $BaseDownloadRoot
 
-    $release = Resolve-NvidiaQuadroLatest
+    $release = Resolve-NvidiaRtxLatest
     if (-not $release) { throw "Could not resolve latest NVIDIA $AppName." }
 
     $version       = $release.Version
@@ -281,11 +283,11 @@ if (`$driver -is [system.array]) # if we have 2+ gpus, we get an array
 }
 
 if(`$driver_version) {
-    `$driver_version = ([regex]"[0-9.]{6}`$").match(`$driver_version).value.Replace(".","").Insert(3,'.')
+`$driver_version = ([regex]"[0-9.]{6}`$").match(`$driver_version).value.Replace(".","").Insert(3,'.')
 
-    `$us = Get-childItem -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object {`$_.DisplayName -like "*NVIDIA*" -and `$_.NVI2_Package -like "*DisplayDriver*"} | select DisplayName, UninstallString
+`$us = Get-childItem -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object {`$_.DisplayName -like "*NVIDIA*" -and `$_.NVI2_Package -like "*DisplayDriver*"} | select DisplayName, UninstallString
 
-    `$result = [bool](`$driver_version -ge `$requiredVersion) -and [bool](`$us -ne `$null) -and [bool]((`$us.DisplayName -replace '[^.0-9]', "") -ge `$requiredVersion)
+`$result = [bool](`$driver_version -ge `$requiredVersion) -and [bool](`$us -ne `$null) -and [bool]((`$us.DisplayName -replace '[^.0-9]', "") -ge `$requiredVersion)
 }
 
 if(`$result){
@@ -334,14 +336,14 @@ if(`$result){
 # Package phase
 # ---------------------------------------------------------------------------
 
-function Invoke-PackageNvidiaQuadro {
+function Invoke-PackageNvidiaRtx {
     Write-Log ""
     Write-Log ("=" * 60)
     Write-Log "NVIDIA Graphics $AppName - PACKAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 
-    $release = Resolve-NvidiaQuadroLatest -Quiet
+    $release = Resolve-NvidiaRtxLatest -Quiet
     if (-not $release) { throw "Could not resolve latest NVIDIA $AppName for manifest lookup." }
 
     $localContentPath = Join-Path $BaseDownloadRoot $release.Version
@@ -397,7 +399,7 @@ function Invoke-PackageNvidiaQuadro {
 if ($GetLatestVersionOnly) {
     try {
         $ProgressPreference = 'SilentlyContinue'
-        $release = Resolve-NvidiaQuadroLatest -Quiet
+        $release = Resolve-NvidiaRtxLatest -Quiet
         if (-not $release) { exit 1 }
         Write-Output $release.Version
         exit 0
@@ -428,15 +430,15 @@ try {
     Write-Log "Pinned psid/pfid             : $NvidiaPsid / $NvidiaPfid (Game Ready branch)"
     Write-Log ""
 
-    if ($StageOnly)       { Invoke-StageNvidiaQuadro }
-    elseif ($PackageOnly) { Invoke-PackageNvidiaQuadro }
-    else                  { Invoke-StageNvidiaQuadro; Invoke-PackageNvidiaQuadro }
+    if ($StageOnly)       { Invoke-StageNvidiaRtx }
+    elseif ($PackageOnly) { Invoke-PackageNvidiaRtx }
+    else                  { Invoke-StageNvidiaRtx; Invoke-PackageNvidiaRtx }
 
     Write-Log ""
     Write-Log "Script execution complete."
 }
 catch {
-    Write-LogErrorRecord -ErrorRecord $_ -Context 'package-nvidia-quadro'
+    Write-LogErrorRecord -ErrorRecord $_ -Context 'package-nvidia-rtx'
     Write-Log "SCRIPT FAILED: $($_.Exception.Message)" -Level ERROR
     exit 1
 }

@@ -181,7 +181,7 @@ function Resolve-NvidiaGeForceLatest {
         }
     }
     catch {
-        Write-Log "Failed to resolve NVIDIA GeForce driver: $($_.Exception.Message)" -Level ERROR
+        Write-Log "Failed to resolve NVIDIA $($AppName): $($_.Exception.Message)" -Level ERROR
         return $null
     }
 }
@@ -194,14 +194,14 @@ function Resolve-NvidiaGeForceLatest {
 function Invoke-StageNvidiaGeForce {
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "NVIDIA Graphics Driver (GeForce Game Ready) - STAGE phase"
+    Write-Log "NVIDIA Graphics $AppName - STAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 
     Initialize-Folder -Path $BaseDownloadRoot
 
     $release = Resolve-NvidiaGeForceLatest
-    if (-not $release) { throw "Could not resolve latest NVIDIA GeForce driver." }
+    if (-not $release) { throw "Could not resolve latest NVIDIA $AppName." }
 
     $version       = $release.Version
     $installerName = $release.InstallerFileName
@@ -268,6 +268,7 @@ exit `$proc.ExitCode
 
     $detectionPs1 = @"
 `$requiredVersion = "$($release.Version)"
+`$result = `$false
 
 `$driver = gwmi win32_VideoController | Where-Object {`$_.Name.contains("NVIDIA")}
 
@@ -279,11 +280,13 @@ if (`$driver -is [system.array]) # if we have 2+ gpus, we get an array
 	`$driver_version = `$driver.DriverVersion 
 }
 
-`$driver_version = ([regex]"[0-9.]{6}`$").match(`$driver_version).value.Replace(".","").Insert(3,'.')
+if(`$driver_version) {
+    `$driver_version = ([regex]"[0-9.]{6}`$").match(`$driver_version).value.Replace(".","").Insert(3,'.')
 
-`$us = Get-childItem -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object {`$_.DisplayName -like "*NVIDIA*" -and `$_.NVI2_Package -like "*DisplayDriver*"} | select DisplayName, UninstallString
+    `$us = Get-childItem -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object {`$_.DisplayName -like "*NVIDIA*" -and `$_.NVI2_Package -like "*DisplayDriver*"} | select DisplayName, UninstallString
 
-`$result = [bool](`$driver_version -ge `$requiredVersion) -and [bool](`$us -ne `$null) -and [bool]((`$us.DisplayName -replace '[^.0-9]', "") -ge `$requiredVersion)
+    `$result = [bool](`$driver_version -ge `$requiredVersion) -and [bool](`$us -ne `$null) -and [bool]((`$us.DisplayName -replace '[^.0-9]', "") -ge `$requiredVersion)
+}
 
 if(`$result){
     Write-Host "Installed"
@@ -334,12 +337,12 @@ if(`$result){
 function Invoke-PackageNvidiaGeForce {
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "NVIDIA Graphics Driver (GeForce Game Ready) - PACKAGE phase"
+    Write-Log "NVIDIA Graphics $AppName - PACKAGE phase"
     Write-Log ("=" * 60)
     Write-Log ""
 
     $release = Resolve-NvidiaGeForceLatest -Quiet
-    if (-not $release) { throw "Could not resolve latest NVIDIA GeForce driver for manifest lookup." }
+    if (-not $release) { throw "Could not resolve latest NVIDIA $AppName for manifest lookup." }
 
     $localContentPath = Join-Path $BaseDownloadRoot $release.Version
     $manifestPath     = Join-Path $localContentPath "stage-manifest.json"
@@ -412,7 +415,7 @@ try {
 
     Write-Log ""
     Write-Log ("=" * 60)
-    Write-Log "NVIDIA GeForce Game Ready Auto-Packager starting"
+    Write-Log "NVIDIA $AppName Auto-Packager starting"
     Write-Log ("=" * 60)
     Write-Log ""
     Write-Log ("RunAsUser                    : {0}\{1}" -f $env:USERDOMAIN, $env:USERNAME)
